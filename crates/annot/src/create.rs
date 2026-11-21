@@ -540,11 +540,11 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
 }
 
 /// Text box `tb` (user space; its text upright on a page turned by `turn`), grown down as displayed
-/// until the ink of `text`'s Thai (stacked marks above its first line, descenders below its last)
+/// until the ink of `text`'s Thai or Sinhala (stacked marks above its first line, descenders below its last)
 /// fits inside the padding `pad`, as the appearance lays it out at `size`. Other text, and a box
 /// tall enough already, keep the box they were given.
 fn fit_thai_ink(tb: [f64; 4], turn: i64, text: &str, size: f64, pad: f64) -> [f64; 4] {
-    if !text.chars().any(pdfcraft_fonts::shaped_text::is_thai) {
+    if !text.chars().any(|c| pdfcraft_fonts::shaped_text::is_thai(c) || pdfcraft_fonts::shaped_text::is_sinhala(c)) {
         return tb;
     }
     let [x0, y0, x1, y1] = normalize(tb);

@@ -45,12 +45,13 @@ const HEBREW_FONT_NAME: &str = "PCHebrew";
 /// The `/Name` of the Type 3 fonts generated from the bundled Latin (Inter) face.
 const LATIN_FONT_NAME: &str = "PCLatin";
 
-/// Whether `font` is one of those generated fonts (Latin, Japanese, Hebrew or Thai): a replacement longer
-/// than one of them is split across several, which read back as one line (see [`same_font`]).
+/// Whether `font` is one of those generated fonts (Latin, Japanese, Hebrew, Thai or Sinhala): a
+/// replacement longer than one of them is split across several, which read back as one line (see
+/// [`same_font`]).
 pub(super) fn is_type3_fallback(font: &Dict) -> bool {
     font.name(b"Subtype") == Some(b"Type3")
         && font.name(b"Name").is_some_and(|n| {
-            n == JAPANESE_FONT_NAME.as_bytes() || n == HEBREW_FONT_NAME.as_bytes() || n == LATIN_FONT_NAME.as_bytes() || n == b"PCThai"
+            n == JAPANESE_FONT_NAME.as_bytes() || n == HEBREW_FONT_NAME.as_bytes() || n == LATIN_FONT_NAME.as_bytes() || n == b"PCThai" || n == b"PCSi"
         })
 }
 
@@ -378,6 +379,14 @@ fn no_hebrew_font() -> EditError {
 /// bundled Latin face behind them, which covers the Latin, Greek and Cyrillic letters they lack
 /// (#2593: the Japanese faces have no қ, ғ, ҳ, ә, ө, ү, ұ or һ).
 pub(crate) fn type3_faces(text: &str, family: crate::added::Family, bold: bool) -> Result<(Vec<&'static CraftFont>, bool), EditError> {
+    // A mark written beside the letter it belongs to (as Sinhala marks are) can't be drawn from a
+    // one-glyph-per-character Type 3 face; the rewriter would print letters and marks beside each
+    // other, not over it. Add text draws Sinhala with the same shape used here, so this says that.
+    if text.chars().any(|c| pdfcraft_fonts::shaped_text::is_sinhala(c)) {
+        return Err(EditError::Invalid(
+            "Sinhala text in an existing paragraph can't be rewritten yet; use Add text to add Sinhala to the page".into(),
+        ));
+    }
     let japanese = pdfcraft_fonts::document_japanese_fonts_for_style(family == crate::added::Family::Times, bold);
     let latin = pdfcraft_fonts::document_latin_fonts(bold);
     if !text.chars().any(crate::bidi::is_hebrew) {

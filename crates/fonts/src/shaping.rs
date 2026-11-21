@@ -1,4 +1,4 @@
-//! Arabic, Hebrew and Thai text shaping with the matching craft-fonts face and bounded glyph outlines.
+//! Arabic, Hebrew, Thai and (bundled) Sinhala text shaping with the matching face and bounded glyph outlines.
 
 use std::sync::OnceLock;
 
@@ -32,6 +32,9 @@ pub enum ShapedScript {
     /// ([`crate::document_latin_fonts`]), which every build has: for the ones WinAnsiEncoding
     /// lacks, beside the standard font that draws the rest.
     Latin,
+    /// Sinhala letters in the bundled Noto Sans Sinhala face ([`crate::document_sinhala_font`]),
+    /// which every build has: the text the standard fonts lack, drawn beside the standard font.
+    Sinhala,
 }
 
 impl ShapedScript {
@@ -41,6 +44,7 @@ impl ShapedScript {
             Self::Hebrew => crate::document_hebrew_font(false),
             Self::Thai => crate::document_thai_font(),
             Self::Latin => crate::document_latin_fonts(false).into_iter().next(),
+            Self::Sinhala => crate::document_sinhala_font(),
         }
     }
 }
@@ -50,11 +54,13 @@ fn face(script: ShapedScript) -> Option<&'static (FontRef<'static>, ShaperData)>
     static HEBREW: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static THAI: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     static LATIN: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
+    static SINHALA: OnceLock<Option<(FontRef<'static>, ShaperData)>> = OnceLock::new();
     let cache = match script {
         ShapedScript::Arabic => &FACE,
         ShapedScript::Hebrew => &HEBREW,
         ShapedScript::Thai => &THAI,
         ShapedScript::Latin => &LATIN,
+        ShapedScript::Sinhala => &SINHALA,
     };
     cache
         .get_or_init(|| {
@@ -96,6 +102,20 @@ pub fn thai_has(c: char) -> bool {
 /// original Unicode text exactly once, including when wrapped or copied from the saved PDF.
 pub fn shape_thai(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
     shape_script(text, false, ShapedScript::Thai)
+}
+
+/// Whether the bundled Sinhala face has a glyph for `c` (false without the face). Probed with
+/// the font's cmap alone, not through the shaping pipeline: the check that refuses or lets text
+/// through must not depend on the shaper loading — only on the face's coverage of `c`.
+pub fn sinhala_has(c: char) -> bool {
+    crate::document_sinhala_font().is_some_and(|face| crate::face_has(face.bytes, c))
+}
+
+/// Shape a left-to-right run of Sinhala `text` with the bundled Sinhala face, clusters in
+/// drawing order (a letter with its marks is one cluster).
+/// [`GlyphError::NoFont`] without the face; [`GlyphError::Missing`] when it lacks a character.
+pub fn shape_sinhala(text: &str) -> Result<Vec<ShapedCluster>, GlyphError> {
+    shape_script(text, false, ShapedScript::Sinhala)
 }
 
 /// Whether the bundled Inter face has a glyph for `c`.
@@ -141,16 +161,17 @@ fn shape_script(text: &str, rtl: bool, kind: ShapedScript) -> Result<Vec<ShapedC
         ShapedScript::Arabic => script::ARABIC,
         ShapedScript::Hebrew => script::HEBREW,
         ShapedScript::Thai => script::THAI,
+        ShapedScript::Sinhala => script::SINHALA,
         ShapedScript::Latin => match latin_run(text) {
             LatinRun::Greek => script::GREEK,
             LatinRun::Cyrillic => script::CYRILLIC,
             LatinRun::Latin => script::LATIN,
         },
     });
-    // Preserve the historical Arabic per-character mapping; Hebrew, Thai and Latin marks stay with their base.
+    // Preserve the historical Arabic per-character mapping; Hebrew, Thai, Sinhala and Latin marks stay with their base.
     buffer.set_cluster_level(match kind {
         ShapedScript::Arabic => BufferClusterLevel::Characters,
-        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Latin => BufferClusterLevel::MonotoneGraphemes,
+        ShapedScript::Hebrew | ShapedScript::Thai | ShapedScript::Sinhala | ShapedScript::Latin => BufferClusterLevel::MonotoneGraphemes,
     });
     let shaped = shaper.shape(buffer, ShapeOptions::new());
     // Clusters are byte offsets into `text`; a cluster shows the characters up to the next one.

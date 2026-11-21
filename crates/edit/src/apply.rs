@@ -1,4 +1,4 @@
-use pdfcraft_fonts::shaped_text::{is_thai, thai_refusal, thai_width};
+use pdfcraft_fonts::shaped_text::{is_sinhala, is_thai, sinhala_refusal, thai_refusal, thai_width};
 
 use super::marks::{
     Background, Context, HeaderFooter, MarkKind, MarkText, Watermark, add_picture_resource, bates_start, expand, matrix_number, n, picture, rgb,
@@ -9,6 +9,18 @@ use super::place::{
     place_inside_wrapper, stream_tag, undrawable, wrapper_role,
 };
 use super::{Document, EditError, Object, added, backdrop, helvetica_width};
+
+/// The width of a line of mark text (header, footer, watermark): the fonts it draws, its Thai
+/// and Sinhala shaped, the rest measured by the page font.
+fn mark_width(line: &str, size: f64, latin: impl Fn(&str, f64) -> f64) -> f64 {
+    if line.chars().any(is_thai) {
+        thai_width(line, size, latin)
+    } else if line.chars().any(is_sinhala) {
+        pdfcraft_fonts::shaped_text::sinhala_width(line, size, latin)
+    } else {
+        latin(line, size)
+    }
+}
 
 /// Commit one complete mark operation only after every selected page succeeds. The snapshot
 /// shares original bytes, cross-references, caches and unchanged objects; only the overlay table
@@ -34,7 +46,7 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
     if hf.text.iter().all(|t| t.trim().is_empty()) {
         return Err(EditError::Invalid("type the header or footer text first".into()));
     }
-    if let Some(why) = hf.text.iter().find_map(|t| thai_refusal(t)) {
+    if let Some(why) = hf.text.iter().find_map(|t| thai_refusal(t).or_else(|| sinhala_refusal(t))) {
         return Err(EditError::Invalid(why));
     }
     if let Some(c) = hf.first_undrawable() {
@@ -83,15 +95,16 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
         u32::try_from(u64::from(hf.start_number) + k as u64).map_err(|_| EditError::Invalid("the header page numbers are too large".into()))
     };
     let bates_of = |k: usize| bates0.checked_add(k as u64).ok_or_else(|| EditError::Invalid("the Bates numbers are too large".into()));
-    // Every Thai line drawn on any page (a Bates prefix may join a template's Thai), for its fonts.
-    let mut thai_lines = std::collections::BTreeSet::new();
-    if hf.text.iter().any(|t| t.chars().any(is_thai)) {
+    // Every line with Thai or Sinhala drawn on any page (a Bates prefix may join a template's
+    // text), for its fonts.
+    let mut mark_lines = std::collections::BTreeSet::new();
+    if hf.text.iter().any(|t| t.chars().any(|c| is_thai(c) || is_sinhala(c))) {
         for k in 0..pages.len() {
             let (number, bates) = (number_of(k)?, bates_of(k)?);
-            thai_lines.extend(hf.text.iter().flat_map(|t| expand(t, number, count, bates, cx).lines().map(str::to_owned).collect::<Vec<_>>()));
+            mark_lines.extend(hf.text.iter().flat_map(|t| expand(t, number, count, bates, cx).lines().map(str::to_owned).collect::<Vec<_>>()));
         }
     }
-    let thai = MarkText::new(doc, &all, pages, thai_lines.iter().map(String::as_str))?;
+    let thai = MarkText::new(doc, &all, pages, mark_lines.iter().map(String::as_str))?;
     for (k, &i) in pages.iter().enumerate() {
         let page = &all[i];
         let (w, h) = page.display_size(doc);
@@ -120,7 +133,7 @@ fn add_header_footer_in_place(doc: &mut Document, pages: &[usize], hf: &HeaderFo
             for (li, line) in lines.iter().enumerate() {
                 // Centred and right-aligned text is placed by its width in the chosen face.
                 let face = |s: &str, size: f64| hf.font.width(s, size, false, false);
-                let tw = thai_width(line, size, face);
+                let tw = mark_width(line, size, face);
                 let x = match slot % 3 {
                     0 => left,
                     1 => (w - tw) / 2.0,
@@ -170,7 +183,7 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
     if text.is_empty() && wm.source.is_none() {
         return Err(EditError::Invalid("type the watermark text first".into()));
     }
-    if let Some(why) = wm.source.is_none().then(|| thai_refusal(text)).flatten() {
+    if let Some(why) = wm.source.is_none().then(|| thai_refusal(text).or_else(|| sinhala_refusal(text))).flatten() {
         return Err(EditError::Invalid(why));
     }
     if let Some(c) = wm.first_undrawable() {
@@ -209,7 +222,7 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
             place(doc, page, MarkKind::Watermark, content.into_bytes(), wm.behind)?;
             continue;
         }
-        let widest = lines.iter().map(|l| thai_width(l, 1.0, helvetica_width)).fold(0.0, f64::max).max(0.01);
+        let widest = lines.iter().map(|l| mark_width(l, 1.0, helvetica_width)).fold(0.0, f64::max).max(0.01);
         let size = if wm.font_size > 0.0 { wm.font_size } else { ((w * w + h * h).sqrt() * 0.5 / widest).clamp(6.0, 300.0) };
         let (s, c) = wm.rotation.to_radians().sin_cos();
         let (cx, cy) = (w / 2.0 + wm.offset[0], h / 2.0 + wm.offset[1]);
@@ -233,7 +246,7 @@ fn add_watermark_in_place(doc: &mut Document, pages: &[usize], wm: &Watermark, r
         let total = line_h * (lines.len() as f64 - 1.0);
         let mut current = None;
         for (li, line) in lines.iter().enumerate() {
-            let tw = thai_width(line, size, helvetica_width);
+            let tw = mark_width(line, size, helvetica_width);
             thai.show(
                 &mut content,
                 line,

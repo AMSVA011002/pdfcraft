@@ -6985,6 +6985,9 @@ fn header_and_watermark_drawability_matches_what_applying_refuses() {
         ("Left\r\nRight", None),
         ("A\rB", Some('\r')),
         ("line one\nΕλληνικά", Some('Ε')),
+        // Sinhala is written from the bundled face in every build, so it never refuses.
+        ("අල්ල <<Bates Number#6#1#ACME-#>>", None),
+        ("අල්ල 12", None),
     ] {
         let hf = footer(text);
         assert_eq!(hf.first_undrawable(), refused, "{text:?}");
@@ -7045,7 +7048,46 @@ fn thai_headers_footers_and_watermarks_are_drawn_from_the_thai_face() {
         for text in ["<0E190E490E33>", "<0E01>", "<0E1B0E310E49>"] {
             assert!(mapped.contains(text), "{text} in {mapped}");
         }
+
         shared.push(thai);
+    }
+    assert_eq!(shared[0], shared[1], "every page draws with the same fonts");
+}
+
+/// Sinhala in a header, footer or text watermark is drawn from the bundled Sinhala face as Add text draws it: Type 3 glyphs with a ToUnicode map, one set of fonts shared by every page the mark goes on, beside the mark's standard face.
+#[test]
+fn sinhala_headers_footers_and_watermarks_are_drawn_from_the_bundled_face() {
+    let blank = String::new;
+    let footer = HeaderFooter {
+        text: [blank(), "අල්ල <<1>>".into(), blank(), blank(), blank(), "අතැ <<Bates Number#3#1#අ-#>>".into()],
+        ..HeaderFooter::default()
+    };
+    let wm = Watermark { text: "හඳැ\nDRAFT".into(), ..Watermark::default() };
+    assert_eq!((footer.first_undrawable(), wm.first_undrawable()), (None, None));
+    let mut doc = fixture();
+    add_header_footer(&mut doc, &[0, 1], &footer, false, &cx()).unwrap();
+    add_watermark(&mut doc, &[0, 1], &wm, false).unwrap();
+    let doc = reopen(&doc);
+    let mut shared = Vec::new();
+    for page in 0..2 {
+        let drawn = streams(&doc, page).concat();
+        assert!(drawn.contains("/PCSi") && drawn.contains("(DRAFT) Tj") && !drawn.contains("(?"), "{drawn}");
+        let p = &pdfcraft_model::pages(&doc)[page];
+        let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+        let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+        let si: Vec<_> = fonts.iter().filter(|(k, _)| k.starts_with(b"PCSi")).map(|(k, v)| (k.clone(), v.clone())).collect();
+        assert_eq!(si.len(), 2, "the footer's fonts and the watermark's");
+        let mut mapped = String::new();
+        for (_, f) in &si {
+            let f = doc.resolve(f).as_dict().unwrap().clone();
+            assert_eq!(f.name(b"Subtype"), Some(&b"Type3"[..]));
+            mapped += &String::from_utf8_lossy(&stream_bytes(&doc, f.get(b"ToUnicode").unwrap()).unwrap());
+        }
+        // අල්ල (the footer's left cell) and the Bates prefix (the right cell) copy as typed.
+        for text in ["<0D850DBD0DCA0DBD>", "<0D85>"] {
+            assert!(mapped.contains(text), "{text} in {mapped}");
+        }
+        shared.push(si);
     }
     assert_eq!(shared[0], shared[1], "every page draws with the same fonts");
 }
@@ -7659,6 +7701,59 @@ fn added_thai_text_wraps_between_dictionary_words() {
     }
     assert!(rows.len() > 1 && rows[0].starts_with("      "), "{rows:?}");
     assert_eq!(rows.concat().trim_start(), word);
+}
+
+/// Sinhala added text is shaped from the bundled Noto Sans Sinhala face (present in every
+/// build) and drawn as Type 3 glyph outlines and logical Unicode text, as Add text draws it:
+/// reopening the PDF keeps the typed text, and a retyped item no face can draw is refused by name.
+#[test]
+fn added_sinhala_text_is_shaped_and_survives_reopen() {
+    let mut doc = fixture();
+    let t = AddedText {
+        rect: [20.0, 100.0, 250.0, 300.0],
+        text: "අල්ල 12 Hello".into(),
+        size: 16.0,
+        ..AddedText::default()
+    };
+    if pdfcraft_fonts::document_sinhala_font().is_none() {
+        assert_eq!(first_undrawable(&t), Some('අ'));
+        let before = list_added(&doc);
+        let err = add_content(&mut doc, 0, &Content::Text(t)).unwrap_err().to_string();
+        assert!(err.contains("Sinhala"), "{err}");
+        assert_eq!(list_added(&doc), before);
+        return;
+    }
+    assert_eq!(first_undrawable(&t), None);
+    add_content(&mut doc, 0, &Content::Text(t.clone())).unwrap();
+    let reopened = reopen(&doc);
+    let Content::Text(reopened_text) = &list_added(&reopened)[0].content else { panic!() };
+    assert_eq!(reopened_text.text, "අල්ල 12 Hello", "the logical text is kept for editing");
+    let doc = reopened;
+    let p = &pdfcraft_model::pages(&doc)[0];
+    let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+    let fonts = doc.resolve(res.as_dict().unwrap().get(b"Font").unwrap()).as_dict().unwrap().clone();
+    let shaped: Vec<_> = fonts
+        .iter()
+        .filter(|(k, _)| k.starts_with(b"PCAr"))
+        .map(|(_, v)| doc.resolve(v).as_dict().unwrap().clone())
+        .collect();
+    assert!(!shaped.is_empty(), "a Type 3 font for the Sinhala glyphs");
+    let mut mapped = String::new();
+    for f in &shaped {
+        assert_eq!(f.name(b"Subtype"), Some(&b"Type3"[..]));
+        mapped += &String::from_utf8_lossy(&stream_bytes(&doc, f.get(b"ToUnicode").unwrap()).unwrap());
+    }
+    // The ToUnicode map gives back each Sinhala character's UTF-16 (as one hex string per cluster).
+    assert!(mapped.contains("0D85") && mapped.contains("0DCA"), "{mapped}");
+    // A retyped item no face can draw is refused and the document is left alone.
+    let bad = Content::Text(AddedText { text: "අල්ල 中".into(), ..t });
+    let before = list_added(&doc);
+    let err = update_content(&mut doc, 0, 0, &bad).unwrap_err().to_string();
+    assert!(err.contains("U+4E2D"), "{err}");
+    assert_eq!(list_added(&doc), before);
+    delete_content(&mut doc, 0, 0).unwrap();
+    assert!(list_added(&doc).is_empty());
+    assert!(arabic_font_names(&doc, 0).is_empty());
 }
 
 #[test]

@@ -10,9 +10,10 @@
 //!
 //! The note icons are PdfCraft's own drawings (clean-room.md and licences.md). Text boxes use a standard text
 //! font with WinAnsi encoding: Helvetica, or the face their `/DA` or `/DS` asks for
-//! ([`crate::text_style`]), and draw Thai from the craft-fonts Thai face as Type 3 glyphs
+//! ([`crate::text_style`]), and draw Thai from the craft-fonts face or Sinhala from the bundled
+//! Sinhala face as Type 3 glyphs
 //! (`pdfcraft_fonts::shaped_text`, the writer Add text uses); lines break at that face's
-//! standard-14 widths and the Thai face's shaped advances (no other font program is bundled).
+//! standard-14 widths and the shaped faces' shaped advances (no other font program is bundled).
 
 use pdfcraft_cos::{Dict, Object, PdfString, Stream};
 use pdfcraft_fonts::shaped_text;
@@ -26,7 +27,11 @@ pub fn text_width(text: &str, size: f64) -> f64 {
 
 /// [`text_width`] in the standard `face` a text box draws its other text in.
 pub fn text_width_in(face: pdfcraft_fonts::Std14, text: &str, size: f64) -> f64 {
-    shaped_text::thai_width(text, size, |s, size| face.text_width(s, size))
+    if text.chars().any(|c| shaped_text::is_thai(c) || shaped_text::is_sinhala(c)) {
+        shaped_text::fallback_width(text, size, true, false, true, |s, size| face.text_width(s, size))
+    } else {
+        face.text_width(text, size)
+    }
 }
 
 /// `text` wrapped `width` wide as [`text_width`] measures it; a Thai mark stays on its letter.
@@ -38,7 +43,12 @@ pub fn wrap(text: &str, size: f64, width: f64) -> Vec<String> {
 /// and below the last (0.3), or further where Thai stacked marks or descenders reach, so the box
 /// is sized to their ink and doesn't clip them.
 fn reach(lines: &[String]) -> [f64; 2] {
-    let ink = |line: Option<&String>| line.and_then(|l| shaped_text::thai_reach(l));
+    let ink = |line: Option<&String>| {
+        line.and_then(|l| {
+            (l.chars().any(shaped_text::is_thai)).then(|| shaped_text::thai_reach(l)).flatten()
+                .or_else(|| l.chars().any(shaped_text::is_sinhala).then(|| shaped_text::sinhala_reach(l)).flatten())
+        })
+    };
     [ink(lines.first()).map_or(0.9, |r| r[1].max(0.9)), ink(lines.last()).map_or(0.3, |r| (-r[0]).max(0.3))]
 }
 

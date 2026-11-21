@@ -31,7 +31,8 @@ use crate::pdf::{SignatureInfo, Status, walk_sig_fields};
 /// The font follows from the words, chosen for all three at once so two signatures in
 /// different states never read in two languages: the standard Helvetica when WinAnsi encodes
 /// them, else Inter, embedded and shaped (Latin, Cyrillic, Greek), else a craft-fonts face for
-/// Arabic, Japanese or Telugu, shaped and drawn as outlines, else all three in English.
+/// Arabic, Japanese or Telugu (plus the bundled Sinhala face), shaped and drawn as outlines,
+/// else all three in English.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusCaptions {
     pub valid: String,
@@ -116,6 +117,8 @@ fn script_of(words: &[&str]) -> Option<&'static str> {
         Some("Telu")
     } else if any(|c| matches!(c, '\u{0E00}'..='\u{0E7F}')) {
         Some("Thai")
+    } else if any(|c| matches!(c, '\u{0D80}'..='\u{0DFF}')) {
+        Some("Sinhala")
     } else if any(|c| matches!(c, '\u{0900}'..='\u{097F}' | '\u{A8E0}'..='\u{A8FF}')) {
         Some("Deva")
     } else if any(|c| matches!(c, '\u{3040}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}')) {
@@ -138,6 +141,7 @@ fn face_for(script: Option<&str>, words: &[&str]) -> Option<&'static [u8]> {
         Some("Jpan") => pdfcraft_fonts::document_japanese_fonts_for_style(false, false),
         Some("Arab") => pdfcraft_fonts::document_arabic_font().into_iter().collect(),
         Some("Thai") => pdfcraft_fonts::document_thai_font().into_iter().collect(),
+        Some("Sinhala") => pdfcraft_fonts::document_sinhala_font().into_iter().collect(),
         Some("Deva") => pdfcraft_fonts::document_devanagari_font().into_iter().collect(),
         // Telugu has no document face yet; its interface faces stand in.
         Some("Telu") => pdfcraft_fonts::ui_telugu_fonts(),
@@ -1510,7 +1514,8 @@ mod tests {
     fn captions_in_other_scripts_use_a_face_made_for_them_or_english() {
         // Arabic, Japanese, Telugu, Thai and Devanagari are shaped in a craft-fonts face meant for
         // the script and drawn as outlines when the build has one, and drawn in English when it
-        // does not.
+        // does not. Sinhala is drawn from the bundled face (embedded in every build) and drawn as
+        // outlines all the time.
         // Chinese is always English: no face is picked for it, since the Japanese ones would draw
         // Japanese letterforms and the Chinese one is for the interface alone, even where
         // craft-fonts says it is meant for Hani.
@@ -1520,6 +1525,7 @@ mod tests {
             ("Telu", ["సంతకం చెల్లుబాటు అవుతుంది", "చెల్లుబాటు తెలియదు", "సంతకం చెల్లదు"]),
             ("Thai", ["ลายเซ็นถูกต้อง", "ไม่ทราบความถูกต้อง", "ลายเซ็นไม่ถูกต้อง"]),
             ("Deva", ["हस्ताक्षर मान्य", "वैधता अज्ञात", "हस्ताक्षर अमान्य"]),
+            ("Sinhala", ["අත්සන වලංගු", "අත්සන නොදන්නා", "අත්සන අවලංගු"]),
             ("Hani", ["签名有效", "有效性未知", "签名无效"]),
         ];
         for (script, [valid, unknown, invalid]) in cases {
@@ -1529,6 +1535,8 @@ mod tests {
             let has_face = match script {
                 "Jpan" => !pdfcraft_fonts::document_japanese_fonts_for_style(false, false).is_empty(),
                 "Hani" => false,
+                // The bundled Noto Sans Sinhala face is embedded in every build.
+                "Sinhala" => pdfcraft_fonts::document_sinhala_font().is_some(),
                 script => pdfcraft_fonts::CRAFT_FONTS.iter().any(|f| f.covers(script)),
             };
             if has_face {

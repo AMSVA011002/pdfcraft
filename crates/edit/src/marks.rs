@@ -1,10 +1,13 @@
-use pdfcraft_fonts::shaped_text::{Piece, ShapedFonts, clusters, first_undrawable_in_line, is_thai, thai_message, thai_pieces};
+use pdfcraft_fonts::shaped_text::{
+    Piece, ShapedFonts, clusters, fallback_pieces, first_undrawable_in_line, is_sinhala, is_thai, sinhala_message, sinhala_pieces, thai_message,
+    thai_pieces,
+};
 
 use super::{Dict, Document, EditError, Object, Rgb, added};
 
-/// The Thai of a header, footer or text watermark, drawn from the Thai face as Add text draws it:
-/// Type 3 fonts added to the document once and to each page the mark goes on, beside the page
-/// font that draws the rest.
+/// The Thai and Sinhala of a header, footer or text watermark, drawn from the faces as Add text
+/// draws them: Type 3 fonts added to the document once and to each page the mark goes on, beside
+/// the page font that draws the rest.
 #[derive(Default)]
 pub(crate) struct MarkText {
     shaped: ShapedFonts,
@@ -13,17 +16,20 @@ pub(crate) struct MarkText {
 }
 
 impl MarkText {
-    /// The fonts for the Thai in `lines` (every line the mark draws, on any page), named so that
-    /// none of `pages` (of `all`) has the name already. Thai this build can't draw (it has no Thai
-    /// face, or the face lacks a character) is refused, saying what to do.
+    /// The fonts for the Thai and Sinhala in `lines` (every line the mark draws, on any page),
+    /// named so that none of `pages` (of `all`) has the name already. Thai this build can't draw
+    /// (it has no Thai face, or the face lacks a character) is refused, saying what to do.
     pub(crate) fn new<'a>(
         doc: &mut Document,
         all: &[pdfcraft_model::Page],
         pages: &[usize],
         lines: impl IntoIterator<Item = &'a str>,
     ) -> Result<Self, EditError> {
-        let thai = |line: &str| thai_pieces(line).map_err(|e| EditError::Invalid(thai_message(e, line)));
-        let pieces = lines.into_iter().filter(|l| l.chars().any(is_thai)).map(thai).collect::<Result<Vec<_>, _>>()?;
+        let pieces = lines
+            .into_iter()
+            .filter(|l| l.chars().any(|c| is_thai(c) || is_sinhala(c)))
+            .map(shaped_pieces)
+            .collect::<Result<Vec<_>, _>>()?;
         if pieces.is_empty() {
             return Ok(Self::default());
         }
@@ -33,12 +39,21 @@ impl MarkText {
                 taken.set(name.clone(), font.clone());
             }
         }
+        let prefix = if clusters(pieces.iter().map(Vec::as_slice)).any(|c| c.script == pdfcraft_fonts::ShapedScript::Thai) {
+            "PCTh"
+        } else {
+            "PCSi"
+        };
         let mut fonts = Dict::new();
         let shaped =
-            ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), pdfcraft_fonts::shaped_glyph, &taken, &mut fonts, "PCTh", &mut |o| {
+            ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), pdfcraft_fonts::shaped_glyph, &taken, &mut fonts, prefix, &mut |o| {
                 Object::Ref(doc.add(o))
             })
-            .map_err(|(e, c)| EditError::Invalid(thai_message(e, &c.text)))?;
+            .map_err(|(e, c)| EditError::Invalid(match c.script {
+                pdfcraft_fonts::ShapedScript::Thai => thai_message(e, &c.text),
+                pdfcraft_fonts::ShapedScript::Sinhala => sinhala_message(e, &c.text),
+                _ => thai_message(e, &c.text),
+            }))?;
         Ok(Self { shaped, fonts })
     }
 
@@ -58,7 +73,7 @@ impl MarkText {
     ) {
         let plain = || vec![Piece::Latin(line.into())];
         // `new` shaped every line drawn, so this shapes.
-        let pieces = if self.fonts.is_empty() || !line.chars().any(is_thai) { plain() } else { thai_pieces(line).unwrap_or_else(|_| plain()) };
+        let pieces = if self.fonts.is_empty() || !line.chars().any(|c| is_thai(c) || is_sinhala(c)) { plain() } else { shaped_pieces(line).unwrap_or_else(|_| plain()) };
         self.shaped.show_line(out, &pieces, x, y, size, latin, pdfcraft_fonts::win_ansi, width, current);
     }
 
@@ -69,6 +84,24 @@ impl MarkText {
         }
         crate::place::add_page_fonts(doc, page, &self.fonts)
     }
+}
+
+/// The pieces of one line of a header, footer or watermark: its Thai and Sinhala shaped (a mixed
+/// line falls back to the shaped runs, else the whole line plain), both and neither handled the
+/// same way, and the runs between them left to the page font.
+fn shaped_pieces(line: &str) -> Result<Vec<Piece>, EditError> {
+    let has_thai = line.chars().any(is_thai);
+    let has_sinhala = line.chars().any(is_sinhala);
+    let pieces = if has_thai && has_sinhala {
+        fallback_pieces(line, true, false, true)
+    } else if has_thai {
+        thai_pieces(line)
+    } else if has_sinhala {
+        sinhala_pieces(line)
+    } else {
+        return Ok(vec![Piece::Latin(line.into())]);
+    };
+    pieces.map_err(|e| EditError::Invalid(if has_thai { thai_message(e, line) } else { sinhala_message(e, line) }))
 }
 
 /// The kinds of page marks.

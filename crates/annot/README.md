@@ -15,7 +15,8 @@ Comments (annotations), ISO 32000-2 §12.5. Layer L3, depends on `pdfcraft-cos`,
   ISO 32000-2 Table 178 places them, the caption in black Helvetica 10.
   Note icons are PdfCraft's own drawings. Text boxes use standard Helvetica (WinAnsi), with
   line breaking by Helvetica's standard-14 metrics. Thai in a text box, callout or Fill & Sign
-  text is shaped and drawn from the craft-fonts Thai face with Add text's writer
+  text is shaped and drawn from the craft-fonts Thai face or the bundled Sinhala face
+  (the latter always present), with Add text's writer
   (`pdfcraft_fonts::shaped_text`: Type 3 glyphs with a ToUnicode map), the box sized to the ink
   of its stacked marks and descenders; a build without a Thai face refuses it
   (`AnnotError::Undrawable`) instead of drawing `?`. Other text it can't

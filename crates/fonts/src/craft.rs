@@ -2,7 +2,9 @@
 //!
 //! `build.rs` embeds every font in craft-fonts' manifest when PdfCraft is built with
 //! `CRAFT_FONTS_DIR=<checkout>`; otherwise [`CRAFT_FONTS`] is empty and everything here returns
-//! nothing. Callers must work either way.
+//! nothing. Callers must work either way. The bundled Sinhala face
+//! ([`document_sinhala_font`], [`ui_sinhala_fonts`]) is not from craft-fonts — craft-fonts carries
+//! no Sinhala face yet — but is embedded in every build.
 
 /// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).
 pub struct CraftFont {
@@ -168,6 +170,25 @@ static INTER_SEMIBOLD_FACE: CraftFont =
 /// SemiBold for bold text. Present in every build, crafted ones included.
 pub fn document_latin_fonts(bold: bool) -> Vec<&'static CraftFont> {
     vec![if bold { &INTER_SEMIBOLD_FACE } else { &INTER_REGULAR_FACE }]
+}
+
+/// The bundled Sinhala document face (`assets/fonts/NotoSansSinhala-Regular.ttf`, OFL-1.1, a
+/// static instance of the upstream variable face). Present in every build, crafted ones
+/// included: the app draws Sinhala text with it wherever it writes text (Add text, header and
+/// footer, watermark, annotations, form values), the same way Inter draws Latin. Like Inter it is
+/// not in craft-fonts: craft-fonts carries no Sinhala face yet.
+static NOTO_SINHALA_FACE: CraftFont =
+    CraftFont { family: "Noto Sans Sinhala", style: "Regular", scripts: &["Sinh"], bytes: include_bytes!("../../../assets/fonts/NotoSansSinhala-Regular.ttf") };
+
+/// The bundled Sinhala face, shared by the interface and the PDF text writer. Present in every
+/// build.
+pub fn ui_sinhala_fonts() -> Vec<&'static CraftFont> {
+    vec![&NOTO_SINHALA_FACE]
+}
+
+/// The face for Sinhala text written into PDFs. Present in every build, crafted ones included.
+pub fn document_sinhala_font() -> Option<&'static CraftFont> {
+    Some(&NOTO_SINHALA_FACE)
 }
 
 fn document_face(faces: &[CraftFont], serif: bool, bold: bool) -> Option<&CraftFont> {

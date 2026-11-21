@@ -258,7 +258,7 @@ pub(crate) fn panel(
             .response
     });
     font_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), tl!("Font")));
-    font_resp.on_hover_text(format!("{}\n{}", tl!("Font"), tl!("Thai and Arabic use regular fallback fonts when available.")));
+    font_resp.on_hover_text(format!("{}\n{}", tl!("Font"), tl!("Thai, Arabic and Sinhala use regular fallback fonts when available.")));
     ui.add_space(4.0);
 
     // Size and colour | bullets, numbering and alignment.

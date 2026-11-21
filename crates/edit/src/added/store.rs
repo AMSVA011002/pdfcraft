@@ -1,5 +1,5 @@
 use super::draw::{draw, params};
-use super::layout::{first_undrawable, is_thai, nums, shaped_arabic, thai_error};
+use super::layout::{first_undrawable, is_sinhala, is_thai, nums, shaped_arabic, sinhala_error, thai_error};
 use super::types::{Added, AddedImage, AddedText, CHAR_SPACING_LIMIT, Family, Ink, MarkerScan, TAG};
 use super::{Content, Dict, Document, EditError, GlyphError, MarkKind, ObjRef, Object, Stream, align_from, check, contents, page_list, place_tagged};
 
@@ -181,6 +181,9 @@ fn validate(c: &Content) -> Result<(), EditError> {
             }
             if t.text.chars().any(is_thai) && pdfcraft_fonts::document_thai_font().is_none() {
                 return Err(thai_error(GlyphError::NoFont, &t.text));
+            }
+            if t.text.chars().any(is_sinhala) && pdfcraft_fonts::document_sinhala_font().is_none() {
+                return Err(sinhala_error(GlyphError::NoFont, &t.text));
             }
             // Without the Arabic face, `draw` decides for the Arabic letters themselves (#403): a new
             // item is refused with what's missing, and one that already holds Arabic stays movable.

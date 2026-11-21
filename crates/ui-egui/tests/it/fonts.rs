@@ -10,6 +10,7 @@ const ARABIC: &str = "واحد اثنين";
 const TELUGU: &str = "తెలుగు ఫైల్";
 const HEBREW: &str = "ייפוי כח.pdf";
 const DEVANAGARI: &str = "हिंदी पाठ सम्पादन";
+const SINHALA: &str = "අපගේ ගොනුව";
 
 /// The embedded craft-i18n catalogs `code` reads (the shared one and PdfCraft's), one text; empty
 /// in a build without them.
@@ -234,6 +235,27 @@ fn system_fallback_covers_telugu() {
         assert!(fonts.has_glyphs(&id, TELUGU), "{id:?} lacks {TELUGU}");
     }
     assert!(layout_widths(&mut fonts, TELUGU).iter().all(|w| w.is_finite() && *w > 0.0));
+}
+
+/// The bundled Sinhala face (embedded in every build, not from craft-fonts) is a fallback in
+/// every family and covers Sinhala text, so file names and document titles never show boxes.
+#[test]
+fn bundled_sinhala_ui_text_has_glyphs() {
+    let defs = theme::font_definitions();
+    let bundled: Vec<String> = pdfcraft_fonts::ui_sinhala_fonts().iter().map(|f| f.name()).collect();
+    assert_eq!(bundled.len(), 1);
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let stack = &defs.families[&family];
+        let own = stack.iter().position(|n| n == "Inter" || n == "JetBrainsMono").expect("the app's own font");
+        for name in &bundled {
+            let at = stack.iter().position(|n| n == name).expect("the bundled Sinhala face is a fallback");
+            assert!(own < at, "{family:?}: {stack:?}");
+        }
+    }
+    let mut fonts = Fonts::new(TextOptions::default(), defs);
+    for id in families() {
+        assert!(fonts.has_glyphs(&id, SINHALA), "{id:?} lacks {SINHALA}");
+    }
 }
 
 /// On a machine with installed Sinhala and Tamil fonts, the installed definitions include them

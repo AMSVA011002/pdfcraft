@@ -26,21 +26,27 @@ pub fn required(text: &str) -> bool {
 /// Character coverage alone does not show that stacked vowels and tones can be laid out.
 /// OpenType Thai requires `mark`/`mkmk` (GPOS); `ccmp` substitution (GSUB) is optional.
 pub fn has_thai_layout(bytes: &[u8]) -> bool {
-    FontRef::new(bytes).is_ok_and(|f| positions_thai_marks(&f))
+    FontRef::new(bytes).is_ok_and(|f| positions_marks(&f, b"thai"))
 }
 
-/// Whether the GPOS features the shaper uses for Thai include `mark` or `mkmk`. The selection is
-/// HarfRust's, through the same read-fonts calls: the `thai` script, else `DFLT`, `dflt` or
-/// `latn` (`ScriptList::select`); then, given no language, a language system tagged `dflt`,
-/// else the script's default one. Marks under a script or language it doesn't select don't
-/// count, nor does a GPOS with only kerning.
-fn positions_thai_marks(face: &FontRef) -> bool {
+/// Whether a Sinhala source program retains its mark positioning (`sinh`, else `DFLT`, `dflt`
+/// or `latn`).
+pub fn has_sinhala_layout(bytes: &[u8]) -> bool {
+    FontRef::new(bytes).is_ok_and(|f| positions_marks(&f, b"sinh"))
+}
+
+/// Whether the GPOS features the shaper uses for the `Tag` script include `mark` or `mkmk`. The
+/// selection is HarfRust's, through the same read-fonts calls: the named script, else `DFLT`,
+/// `dflt` or `latn` (`ScriptList::select`); then, given no language, a language system tagged
+/// `dflt`, else the script's default one. Marks under a script or language it doesn't select
+/// don't count, nor does a GPOS with only kerning.
+fn positions_marks(face: &FontRef, tag: &[u8; 4]) -> bool {
     use skrifa::Tag;
     let Ok(gpos) = face.gpos() else { return false };
     let (Ok(scripts), Ok(features)) = (gpos.script_list(), gpos.feature_list()) else { return false };
     let records = features.feature_records();
     let marks = |index: u16| records.get(usize::from(index)).is_some_and(|r| r.feature_tag() == *b"mark" || r.feature_tag() == *b"mkmk");
-    let Some(selected) = scripts.select(&[Tag::new(b"thai")]) else { return false };
+    let Some(selected) = scripts.select(&[Tag::new(tag)]) else { return false };
     let Ok(script) = scripts.get(selected.index) else { return false };
     let language = match script.lang_sys_index_for_tag(Tag::new(b"dflt")) {
         Some(index) => script.lang_sys(index).ok().map(|l| l.element),
@@ -70,7 +76,7 @@ fn shape_inner(bytes: &[u8], text: &str, legacy_thai: bool) -> Result<ShapedRun,
     let face = FontRef::new(bytes).map_err(|e| e.to_string())?;
     // Only a vowel or tone mark set on its base (or Sara Am, whose Nikhahit is) needs positioning:
     // digits and bare letters shape the same without it.
-    if !legacy_thai && text.chars().any(|c| matches!(u32::from(c), 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e)) && !positions_thai_marks(&face) {
+    if !legacy_thai && text.chars().any(|c| matches!(u32::from(c), 0x0e31 | 0x0e33..=0x0e3a | 0x0e47..=0x0e4e)) && !positions_marks(&face, b"thai") {
         return Err("the source subset has no Thai mark positioning (GPOS mark/mkmk); select its full font".into());
     }
     if text.chars().any(|c| matches!(u32::from(c), 0x0600..=0x06ff | 0x0750..=0x077f | 0x08a0..=0x0dff | 0x0e80..=0x0fff | 0x1780..=0x17ff))

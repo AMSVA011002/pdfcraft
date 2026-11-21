@@ -88,14 +88,17 @@ horizontal scale, rise, color and paint mode, remain in the PDF text state.
 
 A source subset that lacks a needed contextual glyph produces an error asking for the
 complete original face or an explicit replacement. Cross-family replacement requires an
-explicit choice. The document-font menu offers **Noto Sans Thai**: pass its `text_fonts`
-resource (normally `builtin:thai`) as `text_edit.font_resource` or a range's `font_resource`. This replacement
-requires the optional craft-fonts Thai input and currently uses Regular. A matching Noto
+explicit choice. The document-font menu offers **Noto Sans Thai** and **Noto Sans Sinhala**:
+pass their `text_fonts` resources (normally `builtin:thai` and `builtin:sinhala`) as
+`text_edit.font_resource` or a range's `font_resource`. These replacements require the optional
+craft-fonts Thai input for `builtin:thai` (the bundled Sinhala face is embedded in every build)
+and currently use Regular. A matching Noto
 subset can still be completed by that same bundled family when it is Regular and upright; a
 subset its name or descriptor marks bold or italic needs an explicit replacement.
 
 The bundled variable Thai face is written as bounded Type 3 glyph outlines, with shaped
-vowel/tone positions and logical Unicode text, rather than embedded as a static font.
+vowel/tone positions and logical Unicode text, rather than embedded as a static font: the
+same treatment is given to the bundled Sinhala face (`sinh`/`mark`/`mkmk` positioning).
 Saved paragraphs can be reopened and edited again without installing a font. Modern Thai
 shaping of vowels and tone marks uses the source's GPOS mark positioning (a `mark` or `mkmk` feature in the script and language system the shaper
 selects for Thai, not just a GPOS table); GSUB substitution is optional, as specified by
