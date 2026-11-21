@@ -1,8 +1,14 @@
 name: Release
 
+# A Windows-only release: the .exe setup file (WiX Burn bootstrapper around the MSI) plus the MSI
+# and portable zip, built for x64 and arm64. Every push to the `release` branch builds it and
+# creates or updates a **draft** GitHub Release named `PdfCraft v<version>`. The maintainer
+# publishes the draft in the UI.
+#
+# A nightly dry run on main: same build for both Windows architectures, unsigned, no environment,
+# no draft. It finds release-only breakage before release day.
+
 on:
-  # A nightly dry run on main: every release build except macOS, nothing signed or released
-  # (craft-common-actions release.yml `dry-run`). Finds release-only breakage before release day.
   schedule:
     - cron: "20 2 * * *"
   push:
@@ -15,44 +21,232 @@ on:
         default: ""
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  # Regenerates contributors/contributors.json for the release commit; every build bundles it.
+  # Regenerates contributors/contributors.json for the release commit; the build embeds it.
   credits:
     permissions:
       contents: read
       pull-requests: read
     uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@main
+
+  # Fails fast before any build: git dependencies must come from github.com/storytold, and the
+  # lock file must not declare source replacement, patches or path overrides that could silently
+  # swap one. Lives here so every Windows build is gated transitively.
+  git-sources:
+    name: Git dependencies come from storytold
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Git dependencies come from storytold
+        run: |
+          set -euo pipefail
+          test -f Cargo.lock || { echo "Cargo.lock is missing"; exit 1; }
+          # Source replacement, patches and path overrides in cargo config never show up
+          # in Cargo.lock. Parsed rather than grepped: TOML has many spellings of one key.
+          # Cargo still reads the legacy .cargo/config.
+          python3 - <<'PY'
+          import os, sys, tomllib
+          for path in (".cargo/config", ".cargo/config.toml"):
+              if not os.path.exists(path):
+                  continue
+              config = tomllib.load(open(path, "rb"))
+              replaced = [name for name, source in config.get("source", {}).items()
+                          if isinstance(source, dict) and "replace-with" in source]
+              if replaced or "patch" in config or "paths" in config:
+                  print(f"{path} replaces, patches or overrides a source")
+                  sys.exit(1)
+          PY
+          # Fails when Cargo.lock is out of date with the manifests.
+          cargo metadata --locked --format-version 1 > /dev/null
+          python3 - <<'PY'
+          import sys, tomllib
+          lock = tomllib.load(open("Cargo.lock", "rb"))
+          bad = sorted({p["source"] for p in lock.get("package", [])
+                        if p.get("source", "").startswith("git+")
+                        and not p["source"].startswith("git+https://github.com/storytold/")})
+          if bad:
+              print("Git dependencies outside github.com/storytold:", *bad, sep="\n")
+              sys.exit(1)
+          PY
+
+  version:
+    timeout-minutes: 10
+    name: version
+    needs: git-sources
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      date: ${{ steps.v.outputs.date }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: v
+        name: Resolve version
+        uses: storytold/craft-common-actions/actions/resolve-version@main
+        with:
+          input-version: ${{ inputs.version }}
+          app-title: PdfCraft
+
+  windows:
+    timeout-minutes: 90
+    name: Windows ${{ matrix.arch }}
+    needs: [version, credits]
+    # arm64 builds natively on GitHub's Arm runner (free for public repositories). Cross-compiled
+    # on x64 it was the slowest job of the 11 Nov 2026 releases (30 to 39 minutes).
+    runs-on: ${{ matrix.runner }}
+    environment: ${{ github.event_name != 'schedule' && 'release' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, target: x86_64-pc-windows-msvc, runner: windows-latest }
+          - { arch: arm64, target: aarch64-pc-windows-msvc, runner: windows-11-arm }
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      RUST_BACKTRACE: 1
+      VERSION: ${{ needs.version.outputs.version }}
+      BUILD_DATE: ${{ needs.version.outputs.date }}
+      BUILD_SHA: ${{ github.sha }}
+      INPUT_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      # A signed job reads only the secrets the caller lists in its `secrets:` block; values come
+      # from the repo's `release` environment. An unlisted name is empty, and the app's packaging
+      # would then warn and ship unsigned, so on the release branch fail here instead.
+      - name: Require signing secrets on the release branch
+        if: github.ref == 'refs/heads/release'
+        shell: bash
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+        run: |
+          if [ -n "$WINDOWS_CERTIFICATE" ] && [ -n "$WINDOWS_CERTIFICATE_PASSWORD" ]; then exit 0; fi
+          missing=""
+          for name in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_CERT_PROFILE; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Windows release builds must be signed, but there is no WINDOWS_CERTIFICATE pair and these Azure Trusted Signing secrets are empty:$missing. List them in the caller's secrets: block and set them in the repo's release environment."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Load refreshed contributor credits
+        if: needs.credits.outputs.artifact-name != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.credits.outputs.artifact-name }}
+          path: contributors
+      - name: Export the app's build variables
+        id: app-env
+        # <PREFIX>_VERSION, _BUILD_DATE and _BUILD_SHA, with the prefix the app's packaging/env.sh
+        # reads, so this workflow lists no apps and a new app needs no change here.
+        uses: storytold/craft-common-actions/actions/export-app-build-env@main
+        with:
+          app-name: pdfcraft
+          version: ${{ needs.version.outputs.version }}
+          date: ${{ needs.version.outputs.date }}
+      - name: Check out craft-fonts
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
+        with:
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      - name: Check out craft-i18n
+        uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
+      - id: rust
+        uses: storytold/craft-common-actions/actions/rust-channel@main
+        with:
+          targets: ${{ matrix.target }}
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: ${{ steps.rust.outputs.toolchain }}
+          targets: ${{ steps.rust.outputs.targets }}
+          components: ${{ steps.rust.outputs.components }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: release-windows-${{ matrix.arch }}
+          # A dry run restores the entry and saves none: the nightly dry runs would otherwise
+          # fill the repository's 10 GB cache budget with release entries.
+          save-if: ${{ github.event_name != 'schedule' }}
+      - name: Apply version override
+        if: inputs.version != ''
+        shell: bash
+        run: cargo xtask version set "$VERSION"
+      - name: Install WiX
+        uses: storytold/craft-common-actions/actions/install-wix@main
+        with:
+          wix-version: 5.0.2
+      # The .exe setup file is a Burn bundle, and WiX has no built-in bootstrapper application:
+      # the internal-UI BA lives in this extension. install-wix does not add it.
+      - name: Install the BootstrapperApplications extension
+        shell: pwsh
+        run: wix extension add -g "WixToolset.BootstrapperApplications.wixext/5.0.2"
+      - name: Build, sign, package
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          CRAFT_FONTS_REQUIRED: "1"
+        run: ./packaging/windows/package.ps1 -Arch ${{ matrix.arch }} -SetupExe
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-windows-${{ matrix.arch }}
+          path: dist/release/*
+          if-no-files-found: error
+
   release:
-    needs: credits
-    # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
-    uses: storytold/craft-common-actions/.github/workflows/release.yml@main
-    with:
-      dry-run: ${{ github.event_name == 'schedule' }}
-      app-name: pdfcraft
-      app-title: PdfCraft
-      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
-      version: ${{ inputs.version }}
-      contributors-artifact: ${{ needs.credits.outputs.artifact-name }}
-    secrets:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-      AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
-      AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
-      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}
+    timeout-minutes: 10
+    name: Draft GitHub Release
+    if: ${{ github.event_name != 'schedule' && !cancelled() && !contains(needs.*.result, 'failure') }}
+    needs: [version, windows]
+    runs-on: ubuntu-24.04
+    environment: ${{ github.event_name != 'schedule' && 'release' || '' }}
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: storytold/craft-common-actions/actions/draft-release@main
+        with:
+          version: ${{ needs.version.outputs.version }}
+          app-title: PdfCraft
+          prerelease: ${{ needs.version.outputs.prerelease }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

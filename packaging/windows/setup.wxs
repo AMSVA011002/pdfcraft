@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <!-- A Burn bootstrapper around the MSI (pdfcraft.wxs): it produces the .exe setup file a
+       Windows user double-clicks. The MSI keeps doing the real work; the bundle is the
+       front door. The MSI is hidden inside the bundle (Visible="no"), so Programs and
+       Features lists one "PdfCraft" entry, and the bundle owns the upgrade identity
+       (the MSI keeps its own UpgradeCode, MajorUpgrade and per-user/machine scope
+       untouched).
+       "Learning Machines LLC": the same publisher as the MSI.
+       The internal UI bootstrapper application drives the MSI's own dialogs, so the setup
+       .exe behaves exactly like the MSI: same welcome page, same install-folder picker,
+       same shortcut and right-click-menu checkboxes, same per-user/per-machine choice.
+       The UpgradeCode below is new, distinct from the MSI's, on purpose: the bundle is
+       the identity a user upgrades, not the MSI.
+       Building this requires the WixToolset.BootstrapperApplications.wixext extension
+       (wix extension add -g "WixToolset.BootstrapperApplications.wixext/$version"), which
+       install-wix does not add: the default BA does not exist. -->
+  <Bundle Name="PdfCraft" Version="$(var.BundleVersion)" Manufacturer="Learning Machines LLC"
+          UpgradeCode="5538F61F-93FD-41AA-B334-BF7DEA859629" IconSourceFile="$(var.IconPath)">
+    <BootstrapperApplication>
+      <bal:WixInternalUIBootstrapperApplication />
+    </BootstrapperApplication>
+    <Chain>
+      <MsiPackage Id="PdfCraft" SourceFile="$(var.MsiPath)" Visible="no" DisplayName="PdfCraft" />
+    </Chain>
+  </Bundle>
+</Wix>

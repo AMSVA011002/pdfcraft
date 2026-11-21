@@ -421,9 +421,10 @@ git clone https://github.com/storytold/craft-fonts ../craft-fonts
 CRAFT_FONTS_DIR=../craft-fonts cargo run --release -p pdfcraft -- some.pdf
 ```
 
-Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made builds for macOS,
-Windows, Linux (AppImage, Flatpak, `.deb`, `.rpm` and a tarball), FreeBSD and the web; see
-[Downloads](#downloads). On Gentoo, the community [::snakebyte
+Each [GitHub release](https://github.com/storytold/pdfcraft/releases) has ready-made **Windows**
+builds — the setup `.exe`, the MSI and the portable zip, signed — for x64 and arm64; see
+[Downloads](#downloads). Other platforms (macOS, Linux, FreeBSD, the web) are built and checked by CI
+but are not part of the Windows-only release pipeline. On Gentoo, the community [::snakebyte
 overlay](https://github.com/switch87/snakebyte-overlay) packages the Linux release as
 `app-text/pdfcraft-bin` (not maintained by the PdfCraft team):
 
@@ -461,13 +462,15 @@ The summary is in **[ROADMAP.md](ROADMAP.md)**; the full assessment by dimension
 
 ### Windows
 
-| Build | Installer | Portable |
-|---|---|---|
-| x64 (64-bit Intel/AMD) | `pdfcraft-<ver>-windows-x64.msi` | `pdfcraft-<ver>-windows-x64-portable.zip` |
-| arm64 (Snapdragon and other ARM PCs) | `pdfcraft-<ver>-windows-arm64.msi` | `pdfcraft-<ver>-windows-arm64-portable.zip` |
-| x86 (32-bit) | `pdfcraft-<ver>-windows-x86.msi` | `pdfcraft-<ver>-windows-x86-portable.zip` |
+| Build | Setup `.exe` | MSI | Portable |
+|---|---|---|---|
+| x64 (64-bit Intel/AMD) | `pdfcraft-<ver>-windows-x64-setup.exe` | `pdfcraft-<ver>-windows-x64.msi` | `pdfcraft-<ver>-windows-x64-portable.zip` |
+| arm64 (Snapdragon and other ARM PCs) | `pdfcraft-<ver>-windows-arm64-setup.exe` | `pdfcraft-<ver>-windows-arm64.msi` | `pdfcraft-<ver>-windows-arm64-portable.zip` |
+| x86 (32-bit) | not built | not built | not built |
 
-Installers and executables are code-signed.
+The setup `.exe` is the primary Windows artifact: double-click it and it installs PdfCraft
+(it embeds the MSI and drives the same install-policy, scope and shortcut contract, with the MSI
+hidden inside the bundle). Installers and executables are code-signed.
 
 The portable zip runs from any folder, a USB stick included. Its `portable.txt` keeps the settings,
 logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to
@@ -514,45 +517,15 @@ MSI of the same version replace the installed one without asking. Two different 
 be told apart by version, so if your deployment tool checks the file, pin its SHA-256 from
 `SHA256SUMS.txt` (`Get-FileHash <file> -Algorithm SHA256`).
 
-**Signing identities.** The Windows MSIs and both executables are signed through Azure Trusted
-Signing with a certificate issued to `Learning Machines Inc` (Atlanta, Georgia, US). The macOS app
-and command-line tool are signed with the Developer ID `Learning Machines LLC (DJ6XS33FX8)` and
-notarized. The MSI's manufacturer, shown as the publisher in Installed apps, is
-`Learning Machines LLC`.
+**Signing identities.** The Windows setup `.exe` files, the MSIs and both executables are signed
+through Azure Trusted Signing with a certificate issued to `Learning Machines Inc` (Atlanta, Georgia, US).
+The setup `.exe`'s publisher, shown as the publisher in Installed apps, is
+`Learning Machines LLC`. The macOS app and command-line tool (when released) are signed with the
+Developer ID `Learning Machines LLC (DJ6XS33FX8)` and notarized.
 
-### macOS
-
-| Build | File | Notes |
-|---|---|---|
-| App, universal (Apple silicon + Intel) | `pdfcraft-<ver>-macos-universal.dmg` | Signed and notarized |
-| Command-line tool, universal | `pdfcraft-cli-<ver>-macos-universal.zip` | Signed and notarized |
-
-### Linux
-
-| Format | x86_64 | aarch64 (ARM64) | Notes |
-|---|---|---|---|
-| AppImage | `pdfcraft-<ver>-linux-x86_64.AppImage` | `pdfcraft-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |
-| Flatpak | `pdfcraft-<ver>-linux-x86_64.flatpak` | `pdfcraft-<ver>-linux-aarch64.flatpak` | Sandboxed; `flatpak install --user <file>` |
-| Debian/Ubuntu | `pdfcraft-<ver>-linux-x86_64.deb` | `pdfcraft-<ver>-linux-aarch64.deb` | |
-| Fedora/RHEL/openSUSE | `pdfcraft-<ver>-linux-x86_64.rpm` | `pdfcraft-<ver>-linux-aarch64.rpm` | |
-| Tarball | `pdfcraft-<ver>-linux-x86_64.tar.gz` | `pdfcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
-| Command-line tool | `pdfcraft-cli-<ver>-linux-x86_64.tar.gz` | `pdfcraft-cli-<ver>-linux-aarch64.tar.gz` | `pdfcraft-cli` alone (and its opt-in MCP server), for servers, CI and agents |
-
-RISC-V (riscv64) builds come as tarballs only: `pdfcraft-<ver>-linux-riscv64.tar.gz` and `pdfcraft-cli-<ver>-linux-riscv64.tar.gz`. They are cross-compiled and need glibc 2.39 or newer (Ubuntu 24.04+, Debian 13+).
-
-Every other Linux build needs glibc 2.35 or newer (Ubuntu 22.04+, Debian 12+, Fedora 36+, RHEL 10).
-
-### FreeBSD
-
-| Build | File |
-|---|---|
-| x86_64 | `pdfcraft-<ver>-freebsd-x86_64.tar.gz` |
-
-### Web (WebAssembly)
-
-| Build | File | Notes |
-|---|---|---|
-| Static site | `pdfcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
+The other platforms (macOS, Linux, FreeBSD, the web) are not part of the current Windows-only
+release pipeline; CI still builds and tests them. See [docs/releasing.md](docs/releasing.md) for
+details.
 
 ---
 

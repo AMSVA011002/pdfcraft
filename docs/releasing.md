@@ -1,9 +1,13 @@
 # Releasing PdfCraft
 
-Every push to the `release` branch runs `.github/workflows/release.yml`. It builds installers for
-macOS, Windows, Linux, FreeBSD and the web, signs the ones it has certificates for, and creates or
-updates a **draft** GitHub Release named `PdfCraft v<version>`. Nobody sees a draft until a
-maintainer publishes it.
+Every push to the `release` branch runs `.github/workflows/release.yml`. It builds **Windows**
+artifacts only — the setup `.exe` (a WiX Burn bootstrapper around the MSI), the MSI itself and the
+portable zip for x64 and arm64 — signs them with the certificates in the repository's `release`
+environment, and creates or updates a **draft** GitHub Release named `PdfCraft v<version>`.
+Nobody sees a draft until a maintainer publishes it.
+
+The other platforms (macOS, Linux, FreeBSD, the web) keep being built and checked by CI, but they
+are not part of the release-to-release pipeline; cut a Windows-only release from this workflow.
 
 The pipeline was ported from PhotoCraft's. User-facing names say **PdfCraft**; files, binaries and
 ids stay lowercase (`pdfcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.pdfcraft`).
@@ -20,7 +24,7 @@ ids stay lowercase (`pdfcraft-<version>-<platform>-<arch>.<ext>`, `ai.storytelle
 
    Commit the change through the normal review flow (see the `Release: PdfCraft v0.2.1` PR).
 2. **Merge `main` into `release`** (or fast-forward it) and push. The workflow starts by itself.
-3. **Wait for the draft.** When every job has finished (notarization is the slow part), the
+3. **Wait for the draft.** When every job has finished (the ARM64 build is the slow part), the
    Releases page has a draft `PdfCraft v0.3.0` targeting the pushed commit, with every artifact
    and `SHA256SUMS.txt`. The notes are generated from the merged PRs.
 4. **Check it.** Download an installer or two and read the job summaries. A `::warning::` there
@@ -32,32 +36,28 @@ Pushing to `release` again before you publish rebuilds the same draft and replac
 Once the draft is published, the workflow refuses to touch that version again, so bump it first.
 
 **Test runs:** *Actions ▸ Release ▸ Run workflow* runs the whole pipeline by hand. The optional
-`version` input (such as `0.3.0-rc.1`) overrides `Cargo.toml` for that run only; each job applies it
-with `cargo xtask version set` before building, so the binaries report it too. The signing jobs
-(macOS, Windows) and the draft-release job use the `release` environment, so pick the `release`
-branch in the dialog for a full run. On any other branch the same dispatch is a **dry run**: the
-Linux, Flatpak, FreeBSD and web jobs build and check everything, the signing jobs are refused by the
-environment's branch rule, and the draft-release job (which needs them) is skipped, so nothing is
-published (`gh workflow run release.yml --ref <branch>`).
+`version` input (such as `0.3.0-rc.1`) overrides `Cargo.toml` for that run only; the build applies
+it with `cargo xtask version set` before building, so the binaries report it too. The Windows job
+and the draft-release job use the `release` environment, so pick the `release` branch in the dialog
+for a full run. On any other branch the same dispatch is a **dry run**: the `release` environment is
+refused by its branch rule, nothing builds, and the draft-release job is skipped. The nightly
+dry run on `main` (02:20 UTC) is the exception that still builds both architectures, unsigned, so
+release-only breakage surfaces before release day (`gh workflow run release.yml --ref <branch>`).
 
 ## What gets built
 
 | Platform | Artifacts | Built on |
 |---|---|---|
-| macOS 11+ (universal: Apple silicon + Intel) | `pdfcraft-<v>-macos-universal.dmg`, `pdfcraft-cli-<v>-macos-universal.zip` | `macos-15` |
-| Windows 10+ x64 | `pdfcraft-<v>-windows-x64.msi`, `pdfcraft-<v>-windows-x64-portable.zip` | `windows-latest` |
-| Windows 10+ x86 (32-bit) | `pdfcraft-<v>-windows-x86.msi`, `pdfcraft-<v>-windows-x86-portable.zip` | `windows-latest` |
-| Windows 11 on ARM64 | `pdfcraft-<v>-windows-arm64.msi`, `pdfcraft-<v>-windows-arm64-portable.zip` | `windows-latest` (cross-compiled) |
-| Linux x86_64 | `pdfcraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,tar.gz}`, `pdfcraft-cli-<v>-linux-x86_64.tar.gz` | `ubuntu-22.04` |
-| Linux aarch64 | `pdfcraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,tar.gz}`, `pdfcraft-cli-<v>-linux-aarch64.tar.gz` | `ubuntu-22.04-arm` |
-| Linux riscv64 | `pdfcraft-<v>-linux-riscv64.tar.gz`, `pdfcraft-cli-<v>-linux-riscv64.tar.gz` (glibc 2.39+) | `ubuntu-24.04` (cross-compiled; CLI smoke-tested under QEMU) |
-| Flatpak x86_64 | `pdfcraft-<v>-linux-x86_64.flatpak` | `ubuntu-24.04` (repackages the Linux tarball) |
-| Flatpak aarch64 | `pdfcraft-<v>-linux-aarch64.flatpak` | `ubuntu-24.04-arm` (repackages the Linux tarball) |
-| FreeBSD 14 x86_64 | `pdfcraft-<v>-freebsd-x86_64.tar.gz` | FreeBSD VM on `ubuntu-latest` |
-| Web | `pdfcraft-web-<v>.zip` (a static site; see [`packaging/web/README.md`](../packaging/web/README.md)) | `ubuntu-latest` |
+| Windows 10+ x64 | `pdfcraft-<v>-windows-x64-setup.exe`, `pdfcraft-<v>-windows-x64.msi`, `pdfcraft-<v>-windows-x64-portable.zip` | `windows-latest` |
+| Windows 11 on ARM64 | `pdfcraft-<v>-windows-arm64-setup.exe`, `pdfcraft-<v>-windows-arm64.msi`, `pdfcraft-<v>-windows-arm64-portable.zip` | `windows-11-arm` |
 
-The ARM64 Windows build is cross-compiled on the x64 runner, so signing and WiX work as for the
-other Windows builds; `.github/workflows/windows-arm64.yml` installs and runs it on ARM64 hardware.
+The setup `.exe` is the primary Windows artifact; the MSI and the portable zip remain too.
+Both setups embed the signed MSI through a WiX Burn bootstrapper, so they install the same
+payload, with the same install-policy, scope and shortcut contract.
+
+The ARM64 Windows build runs natively on the `windows-11-arm` runner, so signing and WiX work
+the same as for the x64 build; `.github/workflows/windows-arm64.yml` still installs and runs it
+on ARM64 hardware on every change.
 
 Every binary reports its version (`pdfcraft --version`, `pdfcraft-cli --version`, *Help ▸ About*).
 The workflow sets `PDFCRAFT_BUILD_SHA` and `PDFCRAFT_BUILD_DATE` (`packaging/env.sh` fills them in
@@ -179,11 +179,24 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   The supplied checkout must match the existing binaries when using `-SkipBuild`.
   That presence check does not establish byte-for-byte payload or installation coverage;
   final package qualification still checks all notices against the staged files.
-- **Signing:** `packaging/windows/sign.ps1` signs both executables and the MSI with `signtool`
-  (SHA-256, RFC 3161 timestamp), from a `.pfx` (`WINDOWS_CERTIFICATE`) or Azure Trusted Signing
-  (`AZURE_*`), whichever is configured. It is the one place to change when signing changes.
+- **Setup `.exe`:** `packaging/windows/setup.wxs` is a WiX Burn bootstrapper around the signed MSI
+  (`pdfcraft-<version>-windows-<arch>-setup.exe`). It carries the internal UI bootstrapper
+  application from the WixToolset.BootstrapperApplications.wixext extension (WiX has no default BA),
+  so the file is a single self-contained executable a user can double-click and it drives the MSI's
+  own dialogs — same install policy, scope, shortcut and right-click-menu contract as the MSI; the
+  MSI is embedded and hidden inside the bundle (`Visible="no"`), so *Programs and Features* lists one
+  PdfCraft entry — the bundle — not the MSI. The bundle's version is the MSI version padded to four
+  parts, and its `UpgradeCode` is distinct from the MSI's, so upgrading the setup `.exe` upgrades the
+  installed bundle and lets the MSI's normal MajorUpgrade replace the old MSI in place. Building it
+  needs `wix extension add -g "WixToolset.BootstrapperApplications.wixext/5.0.2"` once per machine;
+  `package.ps1 -SetupExe` gates the step on that, and the release workflow installs it before
+  packaging.
+- **Signing:** `packaging/windows/sign.ps1` signs both executables, the MSI and the setup `.exe`
+  with `signtool` (SHA-256, RFC 3161 timestamp), from a `.pfx` (`WINDOWS_CERTIFICATE`) or Azure
+  Trusted Signing (`AZURE_*`), whichever is configured. It is the one place to change when signing
+  changes.
 
-Locally: `dotnet tool install -g wix --version 5.0.2`, then `pwsh packaging/windows/package.ps1 -Arch x64`.
+Locally: `dotnet tool install -g wix --version 5.0.2` (and, for the setup `.exe`, `wix extension add -g "WixToolset.BootstrapperApplications.wixext/5.0.2"`), then `pwsh packaging/windows/package.ps1 -Arch x64` (add `-SetupExe` for the `.exe` setup file).
 
 ### Linux
 
@@ -234,15 +247,12 @@ covered in [`packaging/web/README.md`](../packaging/web/README.md).
 ## Secrets
 
 The signing secrets live in the repository's **`release` environment** (*Settings ▸ Environments ▸
-release*), restricted to the `release` branch; every job in `release.yml` declares
-`environment: release`. Each secret is optional: if one is missing, that platform's artifacts are
-unsigned and the run shows a warning.
+release*), restricted to the `release` branch; the Windows job and the draft-release job declare
+`environment: release`. The release is unsigned (and the `release` environment refuses the run)
+when neither credential source is set: the build refuses to ship an unsigned Windows release.
 
 | Secret | Used for |
 |---|---|
-| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD` | base64 Developer ID Application `.p12` and its password |
-| `KEYCHAIN_PASSWORD` | the temporary CI keychain (random if unset) |
-| `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | `notarytool` (an app-specific password) |
 | `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` | base64 `.pfx` code-signing certificate and its password |
 | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | service principal for Azure Trusted Signing (instead of a `.pfx`) |
 | `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE` | Trusted Signing endpoint, account and certificate profile |
