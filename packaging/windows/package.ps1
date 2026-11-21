@@ -4,12 +4,15 @@
 
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
+    pdfcraft-<version>-windows-<arch>-setup.exe      the .exe setup file a Windows user installs from
+                                                   (WiX v5 Burn bootstrapper around the MSI)
     pdfcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
     pdfcraft-<version>-windows-<arch>-portable.zip   pdfcraft.exe + pdfcraft-cli.exe + models\ + portable.txt
 
-  The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
-  zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
-  warning when no signing secrets are set).
+  The binaries link the C runtime statically (+crt-static), so the setup.exe, the MSI and the
+  portable zip need no Visual C++ redistributable. The setup.exe wraps the MSI, so it inherits
+  everything the MSI checks (source, scope, install policy); it gets the same signing pass.
+  Signing is delegated to sign.ps1 (skipped with a warning when no signing secrets are set).
 
   Needs: Rust (MSVC toolchain + the target), curl and the network (the OCR models), the Windows SDK (rc.exe, signtool.exe),
   and WiX v5: dotnet tool install --global wix --version 5.0.2
@@ -160,6 +163,26 @@ Invoke-Native 'test-msi' {
 Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
 
+# ---- setup.exe (Burn bootstrapper around the signed MSI) -----------------------------------------
+# The .exe setup file a Windows user double-clicks: the default Burn bootstrapper application and
+# the MSI embedded in it (packaging/windows/setup.wxs). The .exe is the primary Windows artifact of
+# a release; the MSI and the portable zip remain too. The version it carries is the bundle's own
+# 4-part identity (the MSI keeps its own 3-part ProductVersion), padded on the right if
+# shorter.
+$BundleVersion = $MsiVersion
+$parts = $BundleVersion -split '\.'
+if ($parts.Count -lt 4) { $BundleVersion = ($parts + @('0','0','0','0'))[0..3] -join '.' }
+$SetupExe = Join-Path $Dist "pdfcraft-$Version-windows-$Arch-setup.exe"
+Remove-Item -Force -ErrorAction SilentlyContinue $SetupExe
+Invoke-Native 'wix build (setup.exe)' {
+  wix build (Join-Path $PSScriptRoot 'setup.wxs') -arch $Arch `
+    -d "BundleVersion=$BundleVersion" -d "MsiPath=$Msi" -d "IconPath=$(Join-Path $Root 'assets\app-icon\pdfcraft.ico')" `
+    -o $SetupExe
+}
+# wix writes its debug symbols (.wixpdb) next to the bundle; keep them out of the release assets.
+Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($SetupExe, '.wixpdb'))
+& (Join-Path $PSScriptRoot 'sign.ps1') $SetupExe
+
 # ---- portable zip ------------------------------------------------------------------------------
 $Portable = Join-Path $TargetDir "windows-package\pdfcraft-$Version-windows-$Arch-portable"
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
@@ -194,4 +217,4 @@ if ($Arch -ne 'arm64' -or $HostArch -eq 'arm64') {
 } else {
   Write-Output "skipping pdfcraft-cli --version: an $Arch build doesn't run on this $HostArch machine"
 }
-Get-Item $Msi, $Zip | Format-Table Name, Length
+Get-Item $SetupExe, $Msi, $Zip | Format-Table Name, Length
