@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-15 · **Change:** minor (Bosnian (`bs`) offered, its catalog from craft-i18n); previously minor (every catalog restated from `cargo xtask i18n-report` on `main` at `14ae839a`: 2,897 strings in the report's denominator; Hindi, Indonesian, Korean, Thai, Lao and Central Kurdish listed with their catalogs. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-21 · **Change:** minor (Sinhala script support added: bundled Noto Sans Sinhala face embedded in every build, drawn in interface file names and document titles and in written PDFs — Add text, text boxes, Fill & Sign, form fields, headers/footers, watermarks; no interface-language catalog is involved, so scores and estimates unchanged); previously minor (Bosnian (`bs`) offered, its catalog from craft-i18n); previously minor (every catalog restated from `cargo xtask i18n-report` on `main` at `14ae839a`: 2,897 strings in the report's denominator; Hindi, Indonesian, Korean, Thai, Lao and Central Kurdish listed with their catalogs. Scores and estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 Per-language status of PdfCraft's interface against Acrobat Pro's. How translations work and how to
 add a language: [localization.md](localization.md). Summary in [ROADMAP.md](../ROADMAP.md).
@@ -105,6 +105,7 @@ Acrobat languages PdfCraft lacks: Danish, Dutch, Swedish, Hebrew. Vietnamese is 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | Sinhala text support (bundled Noto Sans Sinhala face, embedded in every build, drawn as filled Type 3 outlines): interface file names and document titles, Add text, text boxes, Fill & Sign, form fields, headers/footers, watermarks. Sinhala is a script, not an interface language — no catalog is counted here — so this row updates the script-support side of the page rather than a language row; see localization.md for the interface-side wording |
 | 2026-11-04 | minor | Bosnian (`bs`, Latin, Ijekavian) offered: `LANGUAGES` row, `bs-*` locales, Bosnian date names, one/few/other plurals; the catalog is craft-i18n's (#141) |
 | 2026-11-03 | minor | Every catalog restated from `cargo xtask i18n-report` on `14ae839a` (of the 2,897 strings in the report's denominator), replacing the catalog-union measure, which had reached 2,895 keys and left rows "100%" that were 44 short (#5805). Hindi, Indonesian and Korean restated from 0 to their catalogs, and Thai, Lao and Central Kurdish added to the table. The ≈ 68% score is not re-scored |
 | 2026-10-25 | minor | Arabic current state corrected: catalogs stay logical, Arabic/Kurdish labels take an explicit RTL direction, and stock chrome mirrors; native/browser RTL input, IME and complex workflows remain unqualified. Native Simplified Chinese uses LXGW WenKai Lite; the web build still has no Hans face and the release-pinned craft-fonts still has no Telugu face. Scores and estimates unchanged |

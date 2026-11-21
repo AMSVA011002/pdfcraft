@@ -1980,6 +1980,17 @@ usage = "UI font, embedded in the app; demo PDF labels"
 sha256 = "78a843fade9d4612a5567302fb595b56976eb5fcebf4fea5a5912d638bafcde3"
 
 [[asset]]
+path = "assets/fonts/NotoSansSinhala-Regular.ttf"
+title = "Noto Sans Sinhala Regular"
+author = "The Noto Project Authors"
+source = "https://github.com/notofonts/sinhala"
+licence = "OFL-1.1"
+licence_file = "assets/fonts/OFL-NotoSansSinhala.txt"
+kind = "font"
+usage = "Sinhala text in written PDFs (Add text, headers/footers, watermarks, annotations, form values) and in the interface (file names, document titles), drawn as filled Type 3 glyph outlines; static instance of the upstream variable face, embedded alongside the app"
+sha256 = "571950132da71d648e263d4a34db5f673f5f792de4e2c56c588371271ec3f1fb"
+
+[[asset]]
 path = "assets/fonts/JetBrainsMono-Regular.ttf"
 title = "JetBrains Mono Regular"
 author = "The JetBrains Mono Project Authors"

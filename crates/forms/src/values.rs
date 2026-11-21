@@ -326,7 +326,7 @@ fn write_value_impl(doc: &mut Document, f: &Field, value: &FieldValue, scripts: 
             }
             // Thai this build can't draw is refused (before any script runs), rather than stored
             // and drawn as `?`.
-            if let Some(why) = appearance::thai_refusal(doc, f, t) {
+            if let Some(why) = appearance::shaped_refusal(doc, f, t) {
                 return invalid(format!("{:?} can't take this text: {why}", f.name));
             }
             // Keystroke (on commit) and Validate, as Acrobat runs them before accepting a value.

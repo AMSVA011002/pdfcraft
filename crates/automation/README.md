@@ -224,11 +224,12 @@ undoable and survive saving/reopening. `image_hit` shares the UI's curve and hol
 The bounds, limits and font requirements are in [existing-text editing](../../docs/editing-existing-text.md)
 and [image editing](../../docs/editing-images.md).
 
-`text_fonts` also lists `builtin:thai` when the build includes the bundled Noto Sans Thai face
-(the optional craft-fonts input). Passing it as `text_edit.font_resource` explicitly replaces a
-paragraph or range with that face; the source font is never swapped for it silently. A build
-without the face never lists it, and `text_edit` refuses it there. A page whose own fonts fill
-the listing's 32 MiB preview budget can leave it out too; `text_edit` still accepts it then.
+`text_fonts` also lists `builtin:thai` (the optional craft-fonts Thai input) and `builtin:sinhala`
+(the bundled Noto Sans Sinhala face, present in every build). Passing one as
+`text_edit.font_resource` explicitly replaces a paragraph or range with that face; the source
+font is never swapped for it silently. A build without the Thai face never lists `builtin:thai`,
+and `text_edit` refuses it there. A page whose own fonts fill the listing's 32 MiB preview budget
+can leave the choice out too; `text_edit` still accepts it then.
 
 ### Preparing grouped text
 

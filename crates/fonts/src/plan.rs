@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use pdfcraft_cos::ObjRef;
 
-use crate::{CraftFont, GlyphOutline, craft_glyph, document_japanese_font, face_has, fits_win_ansi, win_ansi_char};
+use crate::{CraftFont, GlyphOutline, craft_glyph, document_japanese_font, document_sinhala_font, face_has, fits_win_ansi, win_ansi_char};
 
 /// Unique characters per Type3 font: the same bound the text-editing fallback uses, so one
 /// hostile word cannot balloon into thousands of glyph streams. A face with more characters
@@ -198,7 +198,8 @@ impl TextPlan {
 }
 
 /// The faces that can draw document text, in preference order: the Japanese document face
-/// (serif document text) first, then the rest of the build input in manifest order.
+/// (serif document text) first, then the rest of the build input in manifest order, and the
+/// bundled Sinhala face last (every build has one).
 fn document_faces() -> Vec<&'static CraftFont> {
     let mut out = Vec::new();
     if let Some(d) = document_japanese_font() {
@@ -208,6 +209,9 @@ fn document_faces() -> Vec<&'static CraftFont> {
         if !out.iter().any(|d| std::ptr::eq(*d, f)) {
             out.push(f);
         }
+    }
+    if let Some(s) = document_sinhala_font() {
+        out.push(s);
     }
     out
 }

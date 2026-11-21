@@ -2,7 +2,7 @@ use super::super::interp::TextState;
 use super::grouping::{across, is_centred, row_rect};
 use super::{
     BlockStyle, CraftFont, Dict, Document, EditError, HashMap, LineEdit, MAX_TYPE3_GLYPHS, Matrix, Metrics, Object, Op, PdfString, Pieces,
-    RangeStyle, TextBlock, TextLine, Type3Glyph, builtin_thai_choice, coincident_ops, content_streams, fallback_face, japanese_glyph_from,
+    RangeStyle, TextBlock, TextLine, Type3Glyph, builtin_sinhala_choice, builtin_thai_choice, coincident_ops, content_streams, fallback_face, japanese_glyph_from,
     needs_type3, no_fallback_font, no_glyph_for, page_dict, reveal_ops, rewritten_contents, row_break, source_encodes, source_family, source_program,
     source_show, source_space, source_width, splice, type3_faces, type3_glyph, write_type3_glyphs,
 };
@@ -129,11 +129,13 @@ struct PreparedCharacters {
     thai: ThaiShaping,
 }
 
-/// How the Thai spans of an edit are shaped, by the font name their characters carry.
+/// How the Thai or Sinhala spans of an edit are shaped, by the font name their characters carry.
 #[derive(Default)]
 struct ThaiShaping {
     /// Draft-only names drawn with the bundled Thai outlines.
     outlined: std::collections::HashSet<String>,
+    /// Draft-only names drawn with the bundled Sinhala outlines.
+    sinhala_outlined: std::collections::HashSet<String>,
     /// Source faces shaped in their existing codes, by resource name.
     legacy: HashMap<String, LegacyFace>,
     /// Draft-only names whose rows, Latin ones included, are shaped and embedded with the
@@ -166,6 +168,7 @@ impl CharacterPreparation<'_> {
     fn prepare(self) -> Result<PreparedCharacters, EditError> {
         let Self { doc, first, lines, draft, spans, style, overrides, fonts, metrics, max_glyphs } = self;
         let thai_choice = builtin_thai_choice(fonts);
+        let sinhala_choice = builtin_sinhala_choice(fonts);
         let mut thai = ThaiShaping::default();
         let mut thai_programs = pdfcraft_cos::DecodeBudget::new(MAX_THAI_PROGRAMS, 0);
         let mut chars = Vec::new();
@@ -185,13 +188,12 @@ impl CharacterPreparation<'_> {
                     ))
                 })?;
                 if !covers_rows(face.bytes, span) {
-                    let missing = span.chars().find(|&c| !row_break(c) && !pdfcraft_fonts::embedding::covers(face.bytes, c.encode_utf8(&mut [0; 4])));
+                    let missing = span.chars().find(|&c| !row_break(c) && !pdfcraft_fonts::embedding::covers(face.bytes, &c.to_string()));
                     return Err(EditError::Invalid(match missing {
                         Some(c) => format!("{} has no glyph for {c} (U+{:04X}); choose a font that covers the text", face.family, u32::from(c)),
                         None => format!("{} cannot show every character in this selection; choose a font that covers the text", face.family),
                     }));
                 }
-                substituted = Some(face.family.to_owned());
                 true
             } else {
                 selected_resource.is_none() && matching_thai_outline(resolver.doc, resolver.fonts, source, span)
@@ -199,7 +201,27 @@ impl CharacterPreparation<'_> {
             if use_thai_outlines {
                 substituted = pdfcraft_fonts::document_thai_font().map(|f| f.family.to_owned());
             }
-            let existing_thai = if !use_thai_outlines {
+            let use_sinhala_outlines = if selected_resource == Some(sinhala_choice.as_str()) {
+                let face = pdfcraft_fonts::document_sinhala_font().ok_or_else(|| {
+                    EditError::Invalid(format!(
+                        "the bundled Sinhala font ({sinhala_choice}) is not in this build; load a complete Sinhala font or choose one the page lists"
+                    ))
+                })?;
+                if !covers_rows(face.bytes, span) {
+                    let missing = span.chars().find(|&c| !row_break(c) && !pdfcraft_fonts::embedding::covers(face.bytes, &c.to_string()));
+                    return Err(EditError::Invalid(match missing {
+                        Some(c) => format!("{} has no glyph for {c} (U+{:04X}); choose a font that covers the text", face.family, u32::from(c)),
+                        None => format!("{} cannot show every character in this selection; choose a font that covers the text", face.family),
+                    }));
+                }
+                true
+            } else {
+                selected_resource.is_none() && matching_sinhala_outline(resolver.doc, resolver.fonts, source, span)
+            };
+            if use_sinhala_outlines && !use_thai_outlines {
+                substituted = pdfcraft_fonts::document_sinhala_font().map(|f| f.family.to_owned());
+            }
+            let existing_thai = if !use_thai_outlines && !use_sinhala_outlines {
                 let chosen = match selected_resource {
                     None => Some(source.clone()),
                     Some(resource) => resolver.fonts.get(resource.as_bytes()).and_then(|f| resolver.doc.dict(f)).map(|font| {
@@ -216,10 +238,14 @@ impl CharacterPreparation<'_> {
             } else {
                 None
             };
-            let outline_name = if use_thai_outlines {
+            let outline_name = if use_thai_outlines || use_sinhala_outlines {
                 // A draft-only name prevents this choice from affecting another style span that
                 // explicitly selects the original resource. It is never saved into the PDF.
-                let mut name = format!("PCOutlineThai{index}");
+                let mut prefix = "PCOutlineSinhala";
+                if use_thai_outlines {
+                    prefix = "PCOutlineThai";
+                }
+                let mut name = format!("{prefix}{index}");
                 while resolver.metrics.contains_key(&name) {
                     name.push('_');
                 }
@@ -231,7 +257,11 @@ impl CharacterPreparation<'_> {
                 {
                     resolver.metrics.insert(name.clone(), m);
                 }
-                thai.outlined.insert(name.clone());
+                if use_thai_outlines {
+                    thai.outlined.insert(name.clone());
+                } else {
+                    thai.sinhala_outlined.insert(name.clone());
+                }
                 Some(name)
             } else {
                 None
@@ -376,6 +406,7 @@ enum ShapedFont {
     Existing(Vec<(String, Vec<u8>)>),
     Program { bytes: Vec<u8>, family: String },
     ThaiOutlines,
+    SinhalaOutlines,
 }
 struct ShapedText {
     run: pdfcraft_fonts::source_shaping::ShapedRun,
@@ -426,6 +457,7 @@ fn embed_shaped_resources(doc: &mut Document, fonts: &mut Dict, runs: &ShapedRun
         let glyphs = match &shaped.font {
             ShapedFont::Existing(codes) => codes.clone(),
             ShapedFont::ThaiOutlines => crate::added::thai_glyph_resources(doc, fonts, &shaped.run)?,
+            ShapedFont::SinhalaOutlines => crate::added::script_glyph_resources(doc, fonts, &shaped.run, pdfcraft_fonts::ShapedScript::Sinhala)?,
             ShapedFont::Program { bytes, family } => {
                 let mappings: Vec<_> = shaped.run.glyphs.iter().map(|glyph| (glyph.text.clone(), glyph.id)).collect();
                 let resource = pdfcraft_fonts::embedding::embed_mapping(doc, fonts, bytes, family, &mappings).map_err(EditError::Invalid)?;
@@ -451,6 +483,8 @@ struct ShapedRunDrawing<'a> {
     text: &'a str,
     matrix: [f64; 6],
     size: f64,
+    /// Marks of a clustered-run script in the text (Thai or Sinhala): spacing comes after a
+    /// whole cluster, keeping marks on their base.
     thai: bool,
 }
 
@@ -1120,7 +1154,25 @@ fn thai_clusters(text: &str) -> Vec<&str> {
 /// Whether the approved Thai face can replace this source, whose embedded subset cannot
 /// shape the replacement. A usable complete source program always takes precedence.
 fn matching_thai_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: &str) -> bool {
-    let Some(face) = pdfcraft_fonts::document_thai_font() else { return false };
+    matching_outline(doc, fonts, source, span, pdfcraft_fonts::ShapedScript::Thai)
+}
+
+/// Whether the bundled Sinhala face can replace this source, whose embedded subset cannot
+/// shape the replacement. A usable complete source program always takes precedence.
+fn matching_sinhala_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: &str) -> bool {
+    matching_outline(doc, fonts, source, span, pdfcraft_fonts::ShapedScript::Sinhala)
+}
+
+/// The bundled Thai or Sinhala face as an outline substitute: regular and upright (a source the
+/// descriptor marks bold or italic keeps that style), a span that has the script's characters and
+/// that the face covers, and no usable registered complete program of the face.
+fn matching_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: &str, script: pdfcraft_fonts::ShapedScript) -> bool {
+    let face = match script {
+        pdfcraft_fonts::ShapedScript::Thai => pdfcraft_fonts::document_thai_font(),
+        pdfcraft_fonts::ShapedScript::Sinhala => pdfcraft_fonts::document_sinhala_font(),
+        _ => None,
+    };
+    let Some(face) = face else { return false };
     // The bundled face is Regular and upright. A source its descriptor or name marks bold or
     // italic keeps that style, so completing it with these outlines would be a silent change:
     // it needs an explicit choice instead. (Variable-font instances often keep the family name.)
@@ -1131,23 +1183,34 @@ fn matching_thai_outline(doc: &Document, fonts: &Dict, source: &TextLine, span: 
     if style.bold || style.italic {
         return false;
     }
-    if !span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f))
-        || !pdfcraft_fonts::embedding::matching_faces(&source.base_font).iter().any(|f| std::ptr::eq(*f, face))
-        || !covers_rows(face.bytes, span)
-    {
+    let has_script = match script {
+        pdfcraft_fonts::ShapedScript::Thai => span.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f)),
+        pdfcraft_fonts::ShapedScript::Sinhala => span.chars().any(|c| matches!(u32::from(c), 0x0d80..=0x0dff)),
+        _ => false,
+    };
+    if !has_script || !covers_rows(face.bytes, span) {
         return false;
     }
     // A registered complete matching program also completes the source subset.
     // Do not replace it with bundled outlines merely because the original resource is a subset.
     // Only one in the source's style does (`program_candidates`), so only that one counts here.
     let family = pdfcraft_fonts::embedding::face_key(&source.base_font);
+    let source_key = pdfcraft_fonts::embedding::face_key(face.family);
+    if family != source_key && !pdfcraft_fonts::embedding::matching_faces(&source.base_font).iter().any(|f| std::ptr::eq(*f, face)) {
+        return false;
+    }
+    let has_layout = match script {
+        pdfcraft_fonts::ShapedScript::Thai => pdfcraft_fonts::source_shaping::has_thai_layout,
+        pdfcraft_fonts::ShapedScript::Sinhala => pdfcraft_fonts::source_shaping::has_sinhala_layout,
+        _ => return false,
+    };
     !fonts.iter().filter_map(|(_, font)| doc.dict(font)).any(|font| {
         let metrics = Metrics::from_dict(doc, &font);
         pdfcraft_fonts::embedding::face_key(&metrics.base_font) == family
             && FontStyle::of(doc, &font, &metrics) == style
             && pdfcraft_fonts::pdf::embedded_sfnt(doc, &font).is_some_and(|bytes| {
                 pdfcraft_fonts::embedding::validate(&bytes).is_ok()
-                    && pdfcraft_fonts::source_shaping::has_thai_layout(&bytes)
+                    && has_layout(&bytes)
                     && covers_rows(&bytes, span)
                     && span.split(row_break).all(|row| pdfcraft_fonts::source_shaping::shape(&bytes, row).is_ok())
             })
@@ -1160,14 +1223,22 @@ fn covers_rows(bytes: &[u8], span: &str) -> bool {
     span.split(row_break).all(|row| pdfcraft_fonts::embedding::covers(bytes, row))
 }
 
-/// Use the same Thai script selection and mark/cluster positioning as Add Text, including
-/// rows beginning with Latin or digits (guessing from their first character would select Latin).
+/// The same script selection and mark/cluster positioning as Add Text, including
+/// rows beginning with Latin or digits (guessing from their first character would select Latin):
+/// Thai and Sinhala alike.
 fn shape_thai_row(text: &str) -> Result<pdfcraft_fonts::source_shaping::ShapedRun, EditError> {
+    shape_script_row(pdfcraft_fonts::ShapedScript::Thai, text)
+}
+
+fn shape_script_row(script: pdfcraft_fonts::ShapedScript, text: &str) -> Result<pdfcraft_fonts::source_shaping::ShapedRun, EditError> {
     if text.len() > 262_144 || text.contains(row_break) {
         return Err(EditError::Invalid("shape one bounded text row at a time".into()));
     }
-    let clusters =
-        pdfcraft_fonts::shape_thai(text).map_err(|e| EditError::Invalid(format!("the matching Thai font cannot shape this text ({e:?})")))?;
+    let clusters = match script {
+        pdfcraft_fonts::ShapedScript::Thai => pdfcraft_fonts::shape_thai(text).map_err(|e| EditError::Invalid(format!("the matching Thai font cannot shape this text ({e:?})")))?,
+        pdfcraft_fonts::ShapedScript::Sinhala => pdfcraft_fonts::shape_sinhala(text).map_err(|e| EditError::Invalid(format!("the matching Sinhala font cannot shape this text ({e:?})")))?,
+        other => return Err(EditError::Invalid(format!("the matching {other:?} font cannot shape this text (no face)"))),
+    };
     let mut glyphs = Vec::new();
     let mut advance = 0.0;
     for cluster in clusters {
@@ -1244,8 +1315,12 @@ fn shape_with_program(doc: &Document, font: &Dict, text: &str) -> Option<(Vec<u8
 /// Shape in the source or an explicitly registered matching full face. Never use interface fonts.
 fn shape_source(doc: &Document, fonts: &Dict, thai: &ThaiShaping, name: &str, text: &str) -> Result<Option<ShapedText>, EditError> {
     if thai.outlined.contains(name) {
-        let shaped = shape_thai_row(text)?;
+        let shaped = shape_script_row(pdfcraft_fonts::ShapedScript::Thai, text)?;
         return Ok(Some(ShapedText { run: shaped, font: ShapedFont::ThaiOutlines }));
+    }
+    if thai.sinhala_outlined.contains(name) {
+        let shaped = shape_script_row(pdfcraft_fonts::ShapedScript::Sinhala, text)?;
+        return Ok(Some(ShapedText { run: shaped, font: ShapedFont::SinhalaOutlines }));
     }
     if let Some(resource) = thai.program.get(name) {
         let font = fonts
@@ -2109,7 +2184,7 @@ pub(crate) fn rewrite_styled_block(
                     text: &string,
                     matrix: tm,
                     size: size_of(source, item.1),
-                    thai: string.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f)),
+                    thai: string.chars().any(|c| matches!(u32::from(c), 0x0e00..=0x0e7f | 0x0d80..=0x0dff)),
                 };
                 segment_width = drawing.draw(&mut block_ops, &mut state)? * state.scale * source.origin.k;
             } else {

@@ -1,15 +1,17 @@
 //! Shaped text written into a PDF: each distinct shaped cluster (a letter with its marks, and the
 //! text it stands for) becomes one glyph of a Type 3 font drawn from the craft-fonts face's
 //! outlines, with a `/ToUnicode` map so copy and search get each character once. No font file is
-//! embedded. Add text writes Arabic, Hebrew and Thai with it; text boxes, Fill & Sign text, form
-//! fields, headers, footers and watermarks write Thai with it, beside the standard font that
-//! draws the rest ([`thai_pieces`]).
+//! embedded. Add text writes Arabic, Hebrew, Thai and Sinhala with it; text boxes, Fill & Sign
+//! text, form fields, headers, footers and watermarks write Thai and Sinhala with it, beside the
+//! standard font that draws the rest ([`thai_pieces`], [`sinhala_pieces`]).
 
 use std::collections::{HashMap, HashSet};
 
 use pdfcraft_cos::{Dict, Document, Object, PdfString, Stream};
 
-use crate::{GlyphError, GlyphOutline, ShapedCluster, ShapedScript, latin_has, literal, shape_latin, shape_thai, shaped_glyph};
+use crate::{
+    GlyphError, GlyphOutline, ShapedCluster, ShapedScript, latin_has, literal, shape_latin, shape_sinhala, shape_thai, shaped_glyph, sinhala_has,
+};
 
 /// Most glyphs in one Type 3 font: its codes are single bytes, 1–240. Text gets one such font per
 /// 240 distinct clusters it needs.
@@ -20,10 +22,19 @@ pub fn is_thai(c: char) -> bool {
     matches!(u32::from(c), 0x0E00..=0x0E7F)
 }
 
-/// Thai vowel signs and tone marks drawn on the consonant before them, and Sara Am, which the
-/// face splits over it: a line never breaks before one, so a mark stays on its letter.
+/// The Sinhala block (U+0D80–U+0DFF): letters, marks, digits and signs.
+pub fn is_sinhala(c: char) -> bool {
+    matches!(u32::from(c), 0x0D80..=0x0DFF)
+}
+
+/// Thai vowel signs and tone marks, and the Sinhala marks drawn on the consonant before them:
+/// a line never breaks before one, so a mark stays on its letter.
 pub fn joins_previous(c: char) -> bool {
-    matches!(u32::from(c), 0x0E31 | 0x0E33..=0x0E3A | 0x0E47..=0x0E4E)
+    matches!(
+        u32::from(c),
+        0x0E31 | 0x0E33..=0x0E3A | 0x0E47..=0x0E4E
+        | 0x0D81 | 0x0D82..=0x0D83 | 0x0DCA | 0x0DCF..=0x0DD4 | 0x0DD6 | 0x0DD8..=0x0DDF | 0x0DF2..=0x0DF3
+    )
 }
 
 /// Why Thai text can't be drawn, for a message an agent or user can act on.
@@ -37,11 +48,26 @@ pub fn thai_message(e: GlyphError, text: &str) -> String {
     }
 }
 
+/// Why Sinhala text can't be drawn, for a message an agent or user can act on.
+pub fn sinhala_message(e: GlyphError, text: &str) -> String {
+    match e {
+        GlyphError::NoFont => "Sinhala text needs the bundled Sinhala face, which this build doesn't include".into(),
+        GlyphError::Missing => format!("the Sinhala face can't show \"{text}\""),
+        GlyphError::TooComplex => "the Sinhala glyphs are too complex; use shorter text".into(),
+    }
+}
+
 /// Whether a generated appearance draws `c` from the bundled Inter face rather than the standard
 /// font: a Latin, Greek or Cyrillic character WinAnsiEncoding lacks (`Γ`, `ř`, `ж`) that the face
 /// has. Line breaks and Thai never are.
 pub fn latin_fallback(c: char) -> bool {
-    !matches!(c, '\n' | '\r') && !is_thai(c) && !crate::win_ansi_encodable(c) && latin_has(c)
+    !matches!(c, '\n' | '\r') && !is_thai(c) && !is_sinhala(c) && !crate::win_ansi_encodable(c) && latin_has(c)
+}
+
+/// Whether a generated appearance draws `c` from the bundled Sinhala face rather than the standard
+/// font: a Sinhala character WinAnsiEncoding lacks that the face has.
+pub fn sinhala_fallback(c: char) -> bool {
+    is_sinhala(c) && sinhala_has(c)
 }
 
 /// Why the bundled Inter face can't draw `text`, for a message an agent or user can act on.
@@ -53,19 +79,23 @@ pub fn latin_message(e: GlyphError, text: &str) -> String {
 }
 
 /// `line` split as a generated appearance draws it, in typing order: with `thai`, its Thai runs
-/// shaped with the Thai face; with `latin`, its runs of [`latin_fallback`] characters shaped with
-/// the bundled Inter face; and the text between them, left to the standard font. An error when a
-/// run can't be shaped (no Thai face, a missing character).
-pub fn fallback_pieces(line: &str, thai: bool, latin: bool) -> Result<Vec<Piece>, GlyphError> {
+/// shaped with the Thai face; with `sinhala`, its runs of [`sinhala_fallback`] characters shaped
+/// with the bundled Sinhala face; with `latin`, its runs of [`latin_fallback`] characters shaped
+/// with the bundled Inter face; and the text between them, left to the standard font. An error
+/// when a run can't be shaped (no face, a missing character).
+pub fn fallback_pieces(line: &str, thai: bool, latin: bool, sinhala: bool) -> Result<Vec<Piece>, GlyphError> {
     #[derive(Clone, Copy, PartialEq)]
     enum Run {
         Thai,
         Latin,
+        Sinhala,
         Standard,
     }
     let kind = |c: char| {
         if thai && is_thai(c) {
             Run::Thai
+        } else if sinhala && sinhala_fallback(c) {
+            Run::Sinhala
         } else if latin && latin_fallback(c) {
             Run::Latin
         } else {
@@ -100,6 +130,7 @@ pub fn fallback_pieces(line: &str, thai: bool, latin: bool) -> Result<Vec<Piece>
     runs.into_iter()
         .map(|(run, s)| match run {
             Run::Thai => shape_thai(&s).map(Piece::Shaped),
+            Run::Sinhala => shape_sinhala(&s).map(Piece::Shaped),
             Run::Latin => shape_latin(&s).map(Piece::Shaped),
             Run::Standard => Ok(Piece::Latin(s)),
         })
@@ -114,11 +145,11 @@ fn is_mark(c: char) -> bool {
 /// The width of `text` at `size` as [`fallback_pieces`] splits it, the standard font's pieces
 /// measured by `standard`. Text with nothing for the fallback faces, or that they can't shape, is
 /// measured by `standard` as a whole (drawing then reports why).
-pub fn fallback_width(text: &str, size: f64, thai: bool, latin: bool, standard: impl Fn(&str, f64) -> f64) -> f64 {
-    if !text.chars().any(|c| (thai && is_thai(c)) || (latin && latin_fallback(c))) {
+pub fn fallback_width(text: &str, size: f64, thai: bool, latin: bool, sinhala: bool, standard: impl Fn(&str, f64) -> f64) -> f64 {
+    if !text.chars().any(|c| (thai && is_thai(c)) || (latin && latin_fallback(c)) || (sinhala && sinhala_fallback(c))) {
         return standard(text, size);
     }
-    match fallback_pieces(text, thai, latin) {
+    match fallback_pieces(text, thai, latin, sinhala) {
         Ok(pieces) => pieces_width(&pieces, size, 0.0, standard),
         Err(_) => standard(text, size),
     }
@@ -144,6 +175,36 @@ pub fn thai_pieces(line: &str) -> Result<Vec<Piece>, GlyphError> {
         }
     }
     runs.into_iter().map(|(thai, s)| if thai { shape_thai(&s).map(Piece::Shaped) } else { Ok(Piece::Latin(s)) }).collect()
+}
+
+/// `line` split into its Sinhala runs, shaped with the bundled Sinhala face, and the text between
+/// them, left to the standard font. Sinhala runs left to right, so the pieces are in typing order.
+/// [`GlyphError::NoFont`] when the face is missing (never happens in this build) and
+/// [`GlyphError::Missing`] when it lacks a character.
+///
+/// The Sinhala face is embedded in every build, so NoFont is a carved-out case rather than a
+/// live refusal path.
+pub fn sinhala_pieces(line: &str) -> Result<Vec<Piece>, GlyphError> {
+    let mut runs: Vec<(bool, String)> = Vec::new();
+    for c in line.chars() {
+        match runs.last_mut() {
+            Some((sinhala, s)) if *sinhala == is_sinhala(c) => s.push(c),
+            _ => runs.push((is_sinhala(c), c.to_string())),
+        }
+    }
+    runs.into_iter().map(|(sinhala, s)| if sinhala { shape_sinhala(&s).map(Piece::Shaped) } else { Ok(Piece::Latin(s)) }).collect()
+}
+
+/// The width of `text` at `size`: its Sinhala shaped, the rest measured by `latin`. Text the face
+/// can't shape is measured by `latin` as a whole (drawing then reports why).
+pub fn sinhala_width(text: &str, size: f64, latin: impl Fn(&str, f64) -> f64) -> f64 {
+    if !text.chars().any(is_sinhala) {
+        return latin(text, size);
+    }
+    match sinhala_pieces(text) {
+        Ok(pieces) => pieces_width(&pieces, size, 0.0, latin),
+        Err(_) => latin(text, size),
+    }
 }
 
 /// The width of `text` at `size`: its Thai shaped, the rest measured by `latin`. Text the Thai
@@ -330,20 +391,21 @@ impl ShapedFonts {
 /// appearance. Thai the face can't draw, and every line when a glyph can't be read, is left to the
 /// standard font, whose encoder writes `?` for it; [`first_undrawable`] reports that.
 pub fn appearance_lines(lines: &[String], fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
-    fallback_appearance_lines(lines, true, false, fonts)
+    fallback_appearance_lines(lines, true, false, true, fonts)
 }
 
 /// [`appearance_lines`] with the pieces [`fallback_pieces`] splits each line into: its Thai with
-/// `thai`, and with `latin` the Latin, Greek and Cyrillic characters the standard fonts lack, drawn
-/// from the bundled Inter face. Their Type 3 fonts are named `PCTh…` when Thai is drawn, else
-/// `PCLa…`. A line whose runs can't be shaped, and every line when a glyph can't be read, is left
-/// to the standard font, which writes `?` for what it lacks; the caller reports that.
-pub fn fallback_appearance_lines(lines: &[String], thai: bool, latin: bool, fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
+/// `thai`, its Sinhala with `sinhala`, and with `latin` the Latin, Greek and Cyrillic characters the
+/// standard fonts lack, drawn from the bundled Inter face. Their Type 3 fonts are named `PCTh…`
+/// when Thai is drawn, `PCSi…` when Sinhala is, `PCLa…` otherwise. A line whose runs can't be
+/// shaped, and every line when a glyph can't be read, is left to the standard font, which writes
+/// `?` for what it lacks; the caller reports that.
+pub fn fallback_appearance_lines(lines: &[String], thai: bool, latin: bool, sinhala: bool, fonts: &mut Dict) -> (Vec<Vec<Piece>>, ShapedFonts) {
     let plain = |l: &String| vec![Piece::Latin(l.clone())];
-    let needs = |c: char| (thai && is_thai(c)) || (latin && latin_fallback(c));
+    let needs = |c: char| (thai && is_thai(c)) || (latin && latin_fallback(c)) || (sinhala && sinhala_fallback(c));
     let pieces: Vec<Vec<Piece>> =
-        lines.iter().map(|l| if l.chars().any(needs) { fallback_pieces(l, thai, latin).unwrap_or_else(|_| plain(l)) } else { plain(l) }).collect();
-    let prefix = if thai { "PCTh" } else { "PCLa" };
+        lines.iter().map(|l| if l.chars().any(needs) { fallback_pieces(l, thai, latin, sinhala).unwrap_or_else(|_| plain(l)) } else { plain(l) }).collect();
+    let prefix = if thai { "PCTh" } else if sinhala { "PCSi" } else { "PCLa" };
     match ShapedFonts::new(clusters(pieces.iter().map(Vec::as_slice)), shaped_glyph, &Dict::new(), fonts, prefix, &mut |o| o).map_err(|(e, _)| e) {
         Ok(shaped) => (pieces, shaped),
         Err(_) => (lines.iter().map(plain).collect(), ShapedFonts::default()),
@@ -357,8 +419,23 @@ pub fn thai_reach(line: &str) -> Option<[f64; 2]> {
         return None;
     }
     let pieces = thai_pieces(line).ok()?;
+    reach(pieces.as_slice())
+}
+
+/// How far the Sinhala glyphs of `line` reach below and above its baseline, in em units; `None`
+/// without Sinhala, or with Sinhala the face can't draw.
+pub fn sinhala_reach(line: &str) -> Option<[f64; 2]> {
+    if !line.chars().any(is_sinhala) {
+        return None;
+    }
+    let pieces = sinhala_pieces(line).ok()?;
+    reach(pieces.as_slice())
+}
+
+/// The em-unit extents of one line's pieces below and above the baseline.
+fn reach(pieces: &[Piece]) -> Option<[f64; 2]> {
     let mut reach: Option<[f64; 2]> = None;
-    for c in clusters([pieces.as_slice()]) {
+    for c in clusters([pieces]) {
         for (id, [_, dy]) in &c.glyphs {
             let g = shaped_glyph(c.script, *id).ok()?;
             if !g.contours.is_empty() {
@@ -371,16 +448,17 @@ pub fn thai_reach(line: &str) -> Option<[f64; 2]> {
 }
 
 /// The first character of `s` a generated appearance would draw as `?`: one the standard fonts
-/// (WinAnsiEncoding) can't draw and that isn't Thai, or Thai on a line the Thai face can't draw
-/// (this build has none, or it lacks a character). Line breaks don't count.
+/// (WinAnsiEncoding) can't draw and that isn't Thai or Sinhala, or Thai or Sinhala on a line the
+/// face can't draw (this build has none, or it lacks a character). Line breaks don't count.
 pub fn first_undrawable(s: &str) -> Option<char> {
     s.split(['\n', '\r']).find_map(first_undrawable_in_line)
 }
 
 /// [`first_undrawable`] for one line drawn as it is: a line break in it counts.
 pub fn first_undrawable_in_line(line: &str) -> Option<char> {
-    let thai_fails = line.chars().any(is_thai) && thai_pieces(line).is_err();
-    line.chars().find(|c| if is_thai(*c) { thai_fails } else { !crate::win_ansi_encodable(*c) })
+    let shaped_fails = (line.chars().any(is_thai) && thai_pieces(line).is_err())
+        || line.chars().any(|c| is_sinhala(c) && !sinhala_has(c));
+    line.chars().find(|c| if is_thai(*c) || is_sinhala(*c) { shaped_fails } else { !crate::win_ansi_encodable(*c) })
 }
 
 /// Why the Thai in `text` can't be drawn ([`thai_message`]): this build has no Thai face, or the
@@ -388,6 +466,15 @@ pub fn first_undrawable_in_line(line: &str) -> Option<char> {
 /// of its Thai draws, or it has none.
 pub fn thai_refusal(text: &str) -> Option<String> {
     text.split(['\n', '\r']).filter(|l| l.chars().any(is_thai)).find_map(|l| thai_pieces(l).err().map(|e| thai_message(e, l)))
+}
+
+/// Why the Sinhala in `text` can't be drawn ([`sinhala_message`]): the face lacks a character.
+/// For tools that refuse such text rather than write `?`; `None` when all of its Sinhala draws,
+/// or it has none.
+pub fn sinhala_refusal(text: &str) -> Option<String> {
+    text.split(['\n', '\r']).filter(|l| l.chars().any(is_sinhala)).find_map(|l| {
+        sinhala_pieces(l).err().map(|e| sinhala_message(e, l))
+    })
 }
 
 /// [`type3_font`] written into `doc`, with its glyphs, descriptor and ToUnicode as objects of their
@@ -460,6 +547,7 @@ fn type3_font(clusters: &[&ShapedCluster], outlines: &HashMap<(ShapedScript, u32
                 ShapedScript::Hebrew => "Hebrew",
                 ShapedScript::Thai => "Thai",
                 ShapedScript::Latin => "Inter",
+                ShapedScript::Sinhala => "Sinhala",
             },
             |f| f.family,
         ),
@@ -593,10 +681,10 @@ mod tests {
         assert!(latin_fallback('Γ') && latin_fallback('ř') && latin_fallback('ж'));
         assert!(!latin_fallback('é') && !latin_fallback('a') && !latin_fallback('\n') && !latin_fallback('北') && !latin_fallback('ก'));
         // Text WinAnsi holds is one piece for the standard font, measured by it.
-        assert_eq!(fallback_pieces("Café (±)", false, true).unwrap(), [Piece::Latin("Café (±)".into())]);
-        assert_eq!(fallback_width("Café", 10.0, false, true, |s, size| s.chars().count() as f64 * size), 40.0);
+        assert_eq!(fallback_pieces("Café (±)", false, true, false).unwrap(), [Piece::Latin("Café (±)".into())]);
+        assert_eq!(fallback_width("Café", 10.0, false, true, false, |s, size| s.chars().count() as f64 * size), 40.0);
         // Greek words, with the standard font's space between them.
-        let pieces = fallback_pieces("Γειά σου", false, true).unwrap();
+        let pieces = fallback_pieces("Γειά σου", false, true, false).unwrap();
         assert!(
             matches!(&pieces[..], [Piece::Shaped(a), Piece::Latin(sp), Piece::Shaped(b)] if sp == " " && a.len() == 4 && b.len() == 3),
             "{pieces:?}"
@@ -604,21 +692,21 @@ mod tests {
         let text: String = clusters([pieces.as_slice()]).map(|c| c.text.as_str()).collect();
         assert_eq!(text, "Γειάσου", "each character copies once");
         assert!(clusters([pieces.as_slice()]).all(|c| c.script == ShapedScript::Latin && c.advance > 0.0));
-        assert!(fallback_width("Γειά", 10.0, false, true, |_, _| 0.0) > 0.0);
+        assert!(fallback_width("Γειά", 10.0, false, true, false, |_, _| 0.0) > 0.0);
         // Mixed: the Latin stays the standard font's.
-        let mixed = fallback_pieces("Name: Γειά ok", false, true).unwrap();
+        let mixed = fallback_pieces("Name: Γειά ok", false, true, false).unwrap();
         assert!(matches!(&mixed[..], [Piece::Latin(a), Piece::Shaped(_), Piece::Latin(b)] if a == "Name: " && b == " ok"), "{mixed:?}");
         // A combining accent the standard font lacks takes its letter with it.
-        let accent = fallback_pieces("Cafe\u{301}!", false, true).unwrap();
+        let accent = fallback_pieces("Cafe\u{301}!", false, true, false).unwrap();
         assert!(
             matches!(&accent[..], [Piece::Latin(a), Piece::Shaped(c), Piece::Latin(b)] if a == "Caf" && b == "!" && c.iter().map(|c| c.text.as_str()).collect::<String>() == "e\u{301}"),
             "{accent:?}"
         );
         // Without `latin`, nothing changes.
-        assert_eq!(fallback_pieces("Γειά", false, false).unwrap(), [Piece::Latin("Γειά".into())]);
+        assert_eq!(fallback_pieces("Γειά", false, false, false).unwrap(), [Piece::Latin("Γειά".into())]);
         // The fonts are built under PCLa names, and a character no face here has stays `?`.
         let mut fonts = Dict::new();
-        let (lines, shaped) = fallback_appearance_lines(&["Γειά 北".to_string()], false, true, &mut fonts);
+        let (lines, shaped) = fallback_appearance_lines(&["Γειά 北".to_string()], false, true, false, &mut fonts);
         assert!(fonts.iter().any(|(k, _)| k.starts_with(b"PCLa")));
         assert!(matches!(&lines[0][..], [Piece::Shaped(c), Piece::Latin(rest)] if shaped.code(&c[0]).is_some() && rest == " 北"), "{lines:?}");
         assert_eq!(first_undrawable_in_line(" 北"), Some('北'));
@@ -648,5 +736,27 @@ mod tests {
         let text: String = clusters([pieces.as_slice()]).map(|c| c.text.as_str()).collect();
         assert_eq!(text, "ชื่อบุญฤทธิ์");
         assert!(thai_width("น้ำ", 10.0, |_, _| 0.0) > 0.0);
+    }
+
+    #[test]
+    fn sinhala_runs_are_shaped_and_the_rest_left_to_the_standard_font() {
+        assert_eq!(sinhala_pieces("Hello").unwrap(), [Piece::Latin("Hello".into())]);
+        assert!(joins_previous('\u{0D81}') && joins_previous('\u{0DD2}') && !joins_previous('අ') && !joins_previous('a'));
+        assert_eq!((first_undrawable("Café\nΓειά"), sinhala_refusal("Café"), sinhala_reach("Hg")), (Some('Γ'), None, None));
+        if crate::document_sinhala_font().is_none() {
+            assert!(matches!(sinhala_pieces("අල්ල"), Err(GlyphError::NoFont)));
+            assert!(sinhala_message(GlyphError::NoFont, "").contains("doesn't include"));
+            assert_eq!(sinhala_width("අල්ල", 10.0, |s, size| s.chars().count() as f64 * size), 40.0, "measured by the standard font");
+            assert_eq!(first_undrawable("ok\nඅල්ල"), Some('අ'));
+            return;
+        }
+        assert_eq!((first_undrawable("අල්ල: අල්ල\nOK"), sinhala_refusal("අල්ල: අල්ල")), (None, None));
+        let pieces = sinhala_pieces("අල්ල: අල්ල 12").unwrap();
+        assert!(matches!(&pieces[..], [Piece::Shaped(_), Piece::Latin(b), Piece::Shaped(_), Piece::Latin(d)] if b == ": " && d == " 12"), "{pieces:?}");
+        let text: String = clusters([pieces.as_slice()]).map(|c| c.text.as_str()).collect();
+        assert_eq!(text, "අල්ලඅල්ල");
+        assert!(sinhala_width("අල්ල", 10.0, |_, _| 0.0) > 0.0);
+        let [lo, hi] = sinhala_reach("අල්ල").unwrap();
+        assert!(lo <= 0.0 && hi >= 0.5, "{lo} {hi}");
     }
 }

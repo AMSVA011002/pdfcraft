@@ -1,6 +1,7 @@
 use super::types::{AddedImage, AddedText};
 use super::{
-    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedScript, shape_arabic, shape_hebrew, shape_thai,
+    Content, Document, EditError, GlyphError, Level, ObjRef, Object, ParagraphBidiInfo, ShapedScript, shape_arabic, shape_hebrew, shape_sinhala,
+    shape_thai,
 };
 
 pub(super) fn nums(doc: &Document, o: Option<&Object>) -> Vec<f64> {
@@ -39,19 +40,27 @@ pub(super) fn wrapped(t: &AddedText) -> Vec<(String, bool, usize)> {
         // Arabic or Hebrew: laid out with the bidirectional algorithm and shaped.
         let rtl_script = para.chars().any(|c| is_arabic(c) || is_hebrew(c));
         let thai = para.chars().any(is_thai);
-        if thai
-            && !rtl_script
-            && let Ok(lines) = thai_lines(t, para, width)
-        {
-            out.extend(lines.into_iter().map(|line| (line, false, index)));
-            continue;
+        let sinhala = para.chars().any(is_sinhala);
+        // Sinhala words are laid out the same way as Thai ones; Thai is written without spaces
+        // between words (it needs a dictionary), Sinhala is written with spaces.
+        if sinhala && !rtl_script && !thai {
+            if let Ok(lines) = sinhala_lines(t, para, width) {
+                out.extend(lines.into_iter().map(|line| (line, false, index)));
+                continue;
+            }
+        }
+        if thai && !rtl_script {
+            if let Ok(lines) = thai_lines(t, para, width) {
+                out.extend(lines.into_iter().map(|line| (line, false, index)));
+                continue;
+            }
         }
         let rtl = rtl_script && unicode_bidi::get_base_direction(para) == unicode_bidi::Direction::Rtl;
         // Arabic words are shaped one by one (joining stops at spaces), so a line's width is the
         // sum of its words' and shaping stays linear in the paragraph's length. The space is the
         // paragraph's; a space between Latin words is drawn in the item's font, a few hundredths
         // of an em apart.
-        let measure = |s: &str| if rtl_script || thai { shaped_width(t, s, rtl) } else { latin_width(t, s) };
+        let measure = |s: &str| if rtl_script || thai || sinhala { shaped_width(t, s, rtl) } else { latin_width(t, s) };
         let space = measure(" ");
         let (mut line, mut line_w) = (String::new(), 0.0);
         // Widths add up (the standard-14 widths have no kerning), so each word is measured once
@@ -136,10 +145,38 @@ fn wrap_words(words: Vec<Vec<(String, f64)>>, width: f64) -> Vec<String> {
     lines
 }
 
+/// Sinhala wrapping: a row ends before a word that would overflow it, at the spaces and at the
+/// breaks [`crate::linebreak::breaks`] finds inside runs without spaces. The spaces where a row
+/// ends are dropped, as in the Latin wrapper. Only a word wider than the row is broken inside, at
+/// shaped cluster boundaries, which never detach a mark from its base.
+fn sinhala_lines(t: &AddedText, para: &str, width: f64) -> Result<Vec<String>, EditError> {
+    let (pieces, _) = shaped_layout(t, para, false)?;
+    let mut atoms = Vec::new();
+    for piece in pieces {
+        match piece {
+            Piece::Shaped(clusters) => atoms.extend(clusters.into_iter().map(|c| (c.text, c.advance * t.size + t.char_spacing))),
+            Piece::Latin(s) => atoms.extend(s.chars().map(|c| {
+                let text = c.to_string();
+                let w = latin_width(t, &text);
+                (text, w)
+            })),
+        }
+    }
+    Ok(wrap_words(sinhala_words(atoms), width))
+}
+
 /// The shaped clusters `atoms` (text and advance) grouped into words: a word starts after spaces,
 /// or where [`crate::linebreak::breaks`] lets a row end inside a run without spaces, and keeps the
 /// spaces that follow it. A break that falls inside a cluster is not one.
+fn sinhala_words(atoms: Vec<(String, f64)>) -> Vec<Vec<(String, f64)>> {
+    words(atoms, |run| crate::linebreak::breaks(run))
+}
+
 fn thai_words(atoms: Vec<(String, f64)>) -> Vec<Vec<(String, f64)>> {
+    words(atoms, |run| crate::linebreak::breaks(run))
+}
+
+fn words(atoms: Vec<(String, f64)>, breaks: impl Fn(&str) -> Vec<usize>) -> Vec<Vec<(String, f64)>> {
     let text: String = atoms.iter().map(|(s, _)| s.as_str()).collect();
     let mut cuts = Vec::new();
     let mut run_start: Option<usize> = None;
@@ -151,7 +188,7 @@ fn thai_words(atoms: Vec<(String, f64)>) -> Vec<Vec<(String, f64)>> {
             }
             (true, Some(start)) => {
                 let run = text.get(start..at).unwrap_or_default();
-                cuts.extend(crate::linebreak::breaks(run).into_iter().map(|b| start.saturating_add(b)));
+                cuts.extend(breaks(run).into_iter().map(|b| start.saturating_add(b)));
                 run_start = None;
             }
             _ => {}
@@ -189,6 +226,12 @@ pub(super) fn is_hebrew(c: char) -> bool {
     matches!(u32::from(c), 0x0591..=0x05F4 | 0xFB1D..=0xFB4F)
 }
 
+/// Sinhala letters, marks, digits and signs: an item with any of them is shaped with the bundled
+/// Sinhala face, which every build has.
+pub(super) fn is_sinhala(c: char) -> bool {
+    pdfcraft_fonts::shaped_text::is_sinhala(c)
+}
+
 /// The first character of `t` that would be drawn as `?`: outside WinAnsiEncoding and not drawn
 /// with the craft-fonts Arabic (#125) or Hebrew (#128) face, or Arabic or Hebrew that the face can't
 /// draw (or that has no face to draw it). Page-content tools refuse such text; the Add-text editor
@@ -199,6 +242,14 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
             return Some(c);
         }
         let rest = AddedText { text: t.text.chars().filter(|c| !is_thai(*c)).collect(), ..t.clone() };
+        return first_undrawable(&rest);
+    }
+    // Sinhala that nothing can draw: the bundled face lacks it.
+    if t.text.chars().any(is_sinhala) {
+        if let Some(c) = t.text.chars().find(|c| is_sinhala(*c) && !pdfcraft_fonts::sinhala_has(*c)) {
+            return Some(c);
+        }
+        let rest = AddedText { text: t.text.chars().filter(|c| !is_sinhala(*c)).collect(), ..t.clone() };
         return first_undrawable(&rest);
     }
     // Arabic or Hebrew that nothing can draw: there's no face, or the face lacks it.
@@ -227,6 +278,7 @@ pub fn first_undrawable(t: &AddedText) -> Option<char> {
 fn shaped_by_a_face(t: &AddedText) -> bool {
     (pdfcraft_fonts::document_arabic_font().is_some() && t.text.chars().any(is_arabic))
         || (pdfcraft_fonts::document_hebrew_font(false).is_some() && t.text.chars().any(is_hebrew))
+        || (pdfcraft_fonts::document_sinhala_font().is_some() && t.text.chars().any(is_sinhala))
 }
 
 /// An Arabic character the face shapes and draws (U+061C, a direction mark, is dropped).
@@ -278,6 +330,8 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
             let after_hebrew = segments.last().is_some_and(|(kind, _)| *kind == Some(ShapedScript::Hebrew));
             let script = if is_thai(c) {
                 Some(ShapedScript::Thai)
+            } else if is_sinhala(c) {
+                Some(ShapedScript::Sinhala)
             } else if is_hebrew(c) || (run_rtl && after_hebrew && !c.is_alphanumeric() && pdfcraft_fonts::hebrew_has(c)) {
                 Some(ShapedScript::Hebrew)
             } else if is_arabic(c) || (run_rtl && !c.is_alphanumeric() && pdfcraft_fonts::arabic_has(c)) {
@@ -299,6 +353,7 @@ pub(super) fn shaped_layout(t: &AddedText, line: &str, rtl: bool) -> Result<(Vec
                     ShapedScript::Arabic => shape_arabic(&s, run_rtl).map_err(|e| arabic_error(e, &s))?,
                     ShapedScript::Hebrew => shape_hebrew(&s, run_rtl).map_err(|e| hebrew_error(e, &s))?,
                     ShapedScript::Thai => shape_thai(&s).map_err(|e| thai_error(e, &s))?,
+                    ShapedScript::Sinhala => shape_sinhala(&s).map_err(|e| sinhala_error(e, &s))?,
                     // Not a script this layout splits out; shaped as such all the same.
                     ShapedScript::Latin => {
                         pdfcraft_fonts::shape_latin(&s).map_err(|e| EditError::Invalid(pdfcraft_fonts::shaped_text::latin_message(e, &s)))?
@@ -344,6 +399,10 @@ pub(super) fn hebrew_error(e: GlyphError, text: &str) -> EditError {
 
 pub(super) fn thai_error(e: GlyphError, text: &str) -> EditError {
     EditError::Invalid(pdfcraft_fonts::shaped_text::thai_message(e, text))
+}
+
+pub(super) fn sinhala_error(e: GlyphError, text: &str) -> EditError {
+    EditError::Invalid(pdfcraft_fonts::shaped_text::sinhala_message(e, text))
 }
 
 /// The box a text item occupies (height from its lines).

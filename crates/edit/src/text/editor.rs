@@ -16,9 +16,21 @@ pub struct TextEditorFont {
     pub choice_only: bool,
 }
 
+/// Reserved document-font choice for explicitly replacing text with the bundled Sinhala face.
+/// This is a selector, never a font resource written into a PDF.
+const BUILTIN_SINHALA_FONT: &str = "builtin:sinhala";
+
 /// Reserved document-font choice for explicitly replacing text with the bundled Thai face.
 /// This is a selector, never a font resource written into a PDF.
 const BUILTIN_THAI_FONT: &str = "builtin:thai";
+
+pub(super) fn builtin_sinhala_choice(fonts: &Dict) -> String {
+    let mut choice = BUILTIN_SINHALA_FONT.to_owned();
+    while fonts.contains(choice.as_bytes()) {
+        choice.push('_');
+    }
+    choice
+}
 
 pub(super) fn builtin_thai_choice(fonts: &Dict) -> String {
     let mut choice = BUILTIN_THAI_FONT.to_owned();
@@ -67,7 +79,7 @@ pub fn text_editor_fonts(doc: &Document, page: usize) -> Result<Vec<TextEditorFo
             });
         }
     }
-    // A missing source family must not make the bundled Thai replacement undiscoverable.
+    // A missing source family must not make the bundled Thai/Sinhala replacement undiscoverable.
     // Offering it does not change the source; callers explicitly select this choice to replace it.
     if let Some(thai) = pdfcraft_fonts::document_thai_font()
         && thai.bytes.len() <= budget
@@ -76,6 +88,16 @@ pub fn text_editor_fonts(doc: &Document, page: usize) -> Result<Vec<TextEditorFo
             resource: builtin_thai_choice(&fonts),
             face: thai.family.into(),
             bytes: thai.bytes.to_vec(),
+            choice_only: true,
+        });
+    }
+    if let Some(sinhala) = pdfcraft_fonts::document_sinhala_font()
+        && sinhala.bytes.len() <= budget
+    {
+        result.push(TextEditorFont {
+            resource: builtin_sinhala_choice(&fonts),
+            face: sinhala.family.into(),
+            bytes: sinhala.bytes.to_vec(),
             choice_only: true,
         });
     }
