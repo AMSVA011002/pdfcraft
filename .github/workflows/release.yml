@@ -205,6 +205,11 @@ jobs:
         uses: storytold/craft-common-actions/actions/install-wix@main
         with:
           wix-version: 5.0.2
+      # The .exe setup file is a Burn bundle, and WiX has no built-in bootstrapper application:
+      # the internal-UI BA lives in this extension. install-wix does not add it.
+      - name: Install the BootstrapperApplications extension
+        shell: pwsh
+        run: wix extension add -g "WixToolset.BootstrapperApplications.wixext/5.0.2"
       - name: Build, sign, package
         shell: pwsh
         env:
@@ -218,7 +223,7 @@ jobs:
           AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           CRAFT_FONTS_REQUIRED: "1"
-        run: ./packaging/windows/package.ps1 -Arch ${{ matrix.arch }}
+        run: ./packaging/windows/package.ps1 -Arch ${{ matrix.arch }} -SetupExe
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-windows-${{ matrix.arch }}

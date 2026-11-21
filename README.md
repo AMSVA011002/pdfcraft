@@ -469,8 +469,8 @@ The summary is in **[ROADMAP.md](ROADMAP.md)**; the full assessment by dimension
 | x86 (32-bit) | not built | not built | not built |
 
 The setup `.exe` is the primary Windows artifact: double-click it and it installs PdfCraft
-(it embeds the MSI and runs it with the same install-policy, scope and shortcut contract).
-Installers and executables are code-signed.
+(it embeds the MSI and drives the same install-policy, scope and shortcut contract, with the MSI
+hidden inside the bundle). Installers and executables are code-signed.
 
 The portable zip runs from any folder, a USB stick included. Its `portable.txt` keeps the settings,
 logs and crash recovery in a `PdfCraftData` folder next to `pdfcraft.exe`, so nothing is written to

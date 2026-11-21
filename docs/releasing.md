@@ -180,18 +180,23 @@ neither the MSI nor the portable zip needs the Visual C++ redistributable.
   That presence check does not establish byte-for-byte payload or installation coverage;
   final package qualification still checks all notices against the staged files.
 - **Setup `.exe`:** `packaging/windows/setup.wxs` is a WiX Burn bootstrapper around the signed MSI
-  (`pdfcraft-<version>-windows-<arch>-setup.exe`). It uses the default bootstrapper application, so
-  the file is a single self-contained executable a user can double-click; the MSI is embedded and
-  hidden inside the bundle (`Visible="no"`), so *Programs and Features* lists one PdfCraft entry —
-  the bundle — not the MSI. The bundle's version is the MSI version padded to four parts, and its
-  `UpgradeCode` is distinct from the MSI's, so upgrading the setup `.exe` upgrades the installed
-  bundle and lets the MSI's normal MajorUpgrade replace the old MSI in place.
+  (`pdfcraft-<version>-windows-<arch>-setup.exe`). It carries the internal UI bootstrapper
+  application from the WixToolset.BootstrapperApplications.wixext extension (WiX has no default BA),
+  so the file is a single self-contained executable a user can double-click and it drives the MSI's
+  own dialogs — same install policy, scope, shortcut and right-click-menu contract as the MSI; the
+  MSI is embedded and hidden inside the bundle (`Visible="no"`), so *Programs and Features* lists one
+  PdfCraft entry — the bundle — not the MSI. The bundle's version is the MSI version padded to four
+  parts, and its `UpgradeCode` is distinct from the MSI's, so upgrading the setup `.exe` upgrades the
+  installed bundle and lets the MSI's normal MajorUpgrade replace the old MSI in place. Building it
+  needs `wix extension add -g "WixToolset.BootstrapperApplications.wixext/5.0.2"` once per machine;
+  `package.ps1 -SetupExe` gates the step on that, and the release workflow installs it before
+  packaging.
 - **Signing:** `packaging/windows/sign.ps1` signs both executables, the MSI and the setup `.exe`
   with `signtool` (SHA-256, RFC 3161 timestamp), from a `.pfx` (`WINDOWS_CERTIFICATE`) or Azure
   Trusted Signing (`AZURE_*`), whichever is configured. It is the one place to change when signing
   changes.
 
-Locally: `dotnet tool install -g wix --version 5.0.2`, then `pwsh packaging/windows/package.ps1 -Arch x64`.
+Locally: `dotnet tool install -g wix --version 5.0.2` (and, for the setup `.exe`, `wix extension add -g "WixToolset.BootstrapperApplications.wixext/5.0.2"`), then `pwsh packaging/windows/package.ps1 -Arch x64` (add `-SetupExe` for the `.exe` setup file).
 
 ### Linux
 
